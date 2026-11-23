@@ -1,7 +1,10 @@
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app_core::{Message, Session};
 use caption_core::CaptionSnapshot;
+use eframe::egui::containers::scroll_area::ScrollBarVisibility;
 use eframe::egui::{self, Align, Color32, Layout, RichText};
 
 use crate::overlay;
@@ -13,6 +16,7 @@ pub struct Santhra {
     sinks: Option<Vec<audio_linux::Sink>>,
     session: Option<Session>,
     snapshot: CaptionSnapshot,
+    overlay: Arc<Mutex<overlay::Shared>>,
     status: String,
     model_ok: bool,
 }
@@ -20,8 +24,7 @@ pub struct Santhra {
 impl Santhra {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let settings = Settings::load();
-        let model_ok =
-            speech_sherpa::ModelFiles::load(std::path::Path::new(&settings.model_dir)).is_ok();
+        let model_ok = speech_sherpa::ModelFiles::load(Path::new(&settings.model_dir)).is_ok();
         let start = settings.start_on_launch;
         let mut app = Self {
             settings,
@@ -29,9 +32,11 @@ impl Santhra {
             sinks: None,
             session: None,
             snapshot: CaptionSnapshot::default(),
+            overlay: Arc::new(Mutex::new(overlay::Shared::default())),
             status: "Idle".into(),
             model_ok,
         };
+        app.sync_overlay();
         if start {
             app.start();
         }
@@ -91,6 +96,14 @@ impl Santhra {
         }
     }
 
+    fn sync_overlay(&mut self) {
+        let mut state = self.overlay.lock().unwrap();
+        state.update(&self.settings, &self.snapshot);
+        if let Some(pos) = state.pos {
+            self.settings.overlay_pos = Some(pos);
+        }
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
@@ -101,7 +114,12 @@ impl Santhra {
             .collapsible(false)
             .resizable(false)
             .default_width(520.0)
-            .show(ctx, |ui| self.settings_body(ui));
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(560.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| self.settings_body(ui));
+            });
         self.settings_open = open;
         if !open {
             self.save_settings();
@@ -118,7 +136,12 @@ impl Santhra {
             .num_columns(2)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
-                ui.label("Audio source");
+                ui.horizontal(|ui| {
+                    ui.label("Audio source");
+                    if ui.small_button("Refresh").clicked() {
+                        self.sinks = None;
+                    }
+                });
                 ui.vertical(|ui| {
                     ui.selectable_value(&mut self.settings.target, None, "Default sink");
                     for sink in &sinks {
@@ -132,7 +155,14 @@ impl Santhra {
                 ui.end_row();
 
                 ui.label("Model directory");
-                ui.text_edit_singleline(&mut self.settings.model_dir);
+                if ui
+                    .text_edit_singleline(&mut self.settings.model_dir)
+                    .changed()
+                {
+                    self.model_ok =
+                        speech_sherpa::ModelFiles::load(Path::new(&self.settings.model_dir))
+                            .is_ok();
+                }
                 ui.end_row();
 
                 ui.label("Threads");
@@ -223,6 +253,18 @@ impl eframe::App for Santhra {
                 ui.separator();
                 ui.toggle_value(&mut self.settings.overlay_enabled, "Overlay");
                 ui.separator();
+                let busy = self.session.is_some();
+                let failed = !self.model_ok
+                    || self.status.starts_with("error")
+                    || self.status.starts_with("cannot");
+                let dot = if busy {
+                    Color32::from_rgb(0x4c, 0xaf, 0x50)
+                } else if failed {
+                    Color32::RED
+                } else {
+                    Color32::GRAY
+                };
+                ui.colored_label(dot, "●");
                 ui.label(&self.status);
                 if !self.model_ok {
                     ui.colored_label(Color32::RED, "model files not found");
@@ -241,16 +283,23 @@ impl eframe::App for Santhra {
                 .inner_margin(16.0)
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
-                    caption_labels(ui, &self.settings, &self.snapshot);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            caption_labels(ui, &self.settings, &self.snapshot);
+                        });
                 });
         });
 
-        overlay::show(ui.ctx(), &mut self.settings, &self.snapshot);
+        overlay::show(ui.ctx(), &self.overlay, self.settings.overlay_enabled);
         self.settings_window(ui.ctx());
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        self.sync_overlay();
         if self.session.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -268,27 +317,41 @@ impl Drop for Santhra {
 }
 
 pub(crate) fn caption_labels(ui: &mut egui::Ui, settings: &Settings, snapshot: &CaptionSnapshot) {
-    let fg = color(settings.text_rgba());
     ui.spacing_mut().item_spacing.y = 6.0;
     if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
         ui.label(
             RichText::new("No captions yet. Press Start, then play something.")
-                .color(fg)
+                .color(color(settings.text_rgba()))
                 .size(18.0),
         );
         return;
     }
     for line in &snapshot.finals {
-        ui.label(RichText::new(&line.text).color(fg).size(settings.font_size));
-    }
-    if settings.show_partial && !snapshot.partial.is_empty() {
-        ui.label(
-            RichText::new(&snapshot.partial)
-                .color(fg)
-                .size(settings.font_size)
-                .italics(),
+        caption_row(
+            ui,
+            &line.text,
+            settings.font_size,
+            color(settings.text_rgba()),
+            false,
         );
     }
+    if settings.show_partial && !snapshot.partial.is_empty() {
+        caption_row(
+            ui,
+            &snapshot.partial,
+            settings.font_size,
+            color(settings.text_rgba()),
+            true,
+        );
+    }
+}
+
+pub(crate) fn caption_row(ui: &mut egui::Ui, text: &str, size: f32, color: Color32, italics: bool) {
+    let mut label = RichText::new(text).color(color).size(size);
+    if italics {
+        label = label.italics();
+    }
+    ui.label(label);
 }
 
 fn color(rgba: [u8; 4]) -> Color32 {

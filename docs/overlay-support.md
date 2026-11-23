@@ -15,5 +15,11 @@ compositor decides which ones it honors.
 Verified on GNOME/Wayland, Intel UHD 620, wgpu/Vulkan. The settings window warns about the two
 Wayland gaps when `WAYLAND_DISPLAY` is set.
 
+Captions are anchored to the bottom edge: when the text is taller than the overlay, the oldest
+lines are clipped off the top so the newest words stay readable.
+
+The overlay keeps updating when the main window is minimized, covered, or unfocused; it is a
+deferred viewport and repaints independently of the main window.
+
 To check the X11-only features: log into an X11 session and run
 `cargo run -p santhra-desktop`, then enable the overlay and toggle always-on-top.
