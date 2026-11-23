@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use caption_core::CaptionSnapshot;
-use eframe::egui::{self, Color32, Sense, ViewportCommand, WindowLevel};
+use eframe::egui::{
+    self, Color32, Pos2, Rect, ResizeDirection, Sense, ViewportCommand, WindowLevel,
+};
 
 use crate::app::caption_row;
 use crate::settings::Settings;
@@ -45,6 +47,7 @@ pub struct Shared {
     pub snapshot: CaptionSnapshot,
     pub style: Style,
     pub pos: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
 }
 
 impl Shared {
@@ -79,7 +82,9 @@ pub fn show(ctx: &egui::Context, shared: &Arc<Mutex<Shared>>, enabled: bool) {
         .with_title("Santhra captions")
         .with_inner_size([style.width, style.height])
         .with_decorations(false)
-        .with_resizable(false)
+        .with_resizable(true)
+        .with_min_inner_size([240.0, 80.0])
+        .with_max_inner_size([1600.0, 600.0])
         .with_transparent(true)
         .with_taskbar(false)
         .with_active(false)
@@ -101,6 +106,7 @@ pub fn show(ctx: &egui::Context, shared: &Arc<Mutex<Shared>>, enabled: bool) {
             (state.style.clone(), state.snapshot.clone())
         };
 
+        let window_rect = ui.max_rect();
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(bg_color(&style)).inner_margin(12.0))
             .show(ui, |ui| {
@@ -121,26 +127,97 @@ pub fn show(ctx: &egui::Context, shared: &Arc<Mutex<Shared>>, enabled: bool) {
                         }
                     });
                 }
-                let drag = ui.interact(
-                    ui.max_rect(),
-                    ui.scope_id().with("drag"),
-                    Sense::click_and_drag(),
-                );
-                if drag.drag_started() {
-                    ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
-                }
-                if drag.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                } else if drag.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                }
             });
 
-        if let Some(rect) = ui.ctx().input(|input| input.viewport().outer_rect) {
-            shared.lock().unwrap().pos = Some([rect.min.x, rect.min.y]);
+        let drag = ui.interact(
+            window_rect,
+            ui.scope_id().with("drag"),
+            Sense::click_and_drag(),
+        );
+        if drag.drag_started() {
+            let origin = ui.input(|input| input.pointer.press_origin());
+            match origin.and_then(|pos| resize_direction(window_rect, pos, RESIZE_BAND)) {
+                Some(direction) => {
+                    ui.ctx()
+                        .send_viewport_cmd(ViewportCommand::BeginResize(direction));
+                }
+                None => {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+            }
+        }
+        let hover = ui.input(|input| input.pointer.hover_pos());
+        if let Some(direction) =
+            hover.and_then(|pos| resize_direction(window_rect, pos, RESIZE_BAND))
+        {
+            ui.ctx().set_cursor_icon(resize_cursor(direction));
+        } else if drag.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if drag.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+
+        let (outer_rect, inner_rect) = ui
+            .ctx()
+            .input(|input| (input.viewport().outer_rect, input.viewport().inner_rect));
+        {
+            let mut state = shared.lock().unwrap();
+            if let Some(rect) = outer_rect {
+                state.pos = Some([rect.min.x, rect.min.y]);
+            }
+            if let Some(rect) = inner_rect {
+                state.size = Some([rect.width(), rect.height()]);
+            }
         }
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     });
+}
+
+const RESIZE_BAND: f32 = 8.0;
+
+fn resize_direction(rect: Rect, pos: Pos2, band: f32) -> Option<ResizeDirection> {
+    if !rect.contains(pos) {
+        return None;
+    }
+    let horizontal = if pos.x - rect.left() <= band {
+        Some(-1)
+    } else if rect.right() - pos.x <= band {
+        Some(1)
+    } else {
+        None
+    };
+    let vertical = if pos.y - rect.top() <= band {
+        Some(-1)
+    } else if rect.bottom() - pos.y <= band {
+        Some(1)
+    } else {
+        None
+    };
+    Some(match (horizontal, vertical) {
+        (Some(-1), Some(-1)) => ResizeDirection::NorthWest,
+        (Some(1), Some(-1)) => ResizeDirection::NorthEast,
+        (Some(-1), Some(1)) => ResizeDirection::SouthWest,
+        (Some(1), Some(1)) => ResizeDirection::SouthEast,
+        (Some(-1), None) => ResizeDirection::West,
+        (Some(1), None) => ResizeDirection::East,
+        (None, Some(-1)) => ResizeDirection::North,
+        (None, Some(1)) => ResizeDirection::South,
+        (None, None) => return None,
+        _ => unreachable!(),
+    })
+}
+
+fn resize_cursor(direction: ResizeDirection) -> egui::CursorIcon {
+    match direction {
+        ResizeDirection::North => egui::CursorIcon::ResizeNorth,
+        ResizeDirection::South => egui::CursorIcon::ResizeSouth,
+        ResizeDirection::East => egui::CursorIcon::ResizeEast,
+        ResizeDirection::West => egui::CursorIcon::ResizeWest,
+        ResizeDirection::NorthEast => egui::CursorIcon::ResizeNorthEast,
+        ResizeDirection::SouthEast => egui::CursorIcon::ResizeSouthEast,
+        ResizeDirection::NorthWest => egui::CursorIcon::ResizeNorthWest,
+        ResizeDirection::SouthWest => egui::CursorIcon::ResizeSouthWest,
+    }
 }
 
 #[cfg(test)]
@@ -159,5 +236,32 @@ mod tests {
         assert_eq!(bg_color(&style).to_srgba_unmultiplied()[3], 128);
         style.opacity = 0.0;
         assert_eq!(bg_color(&style).to_srgba_unmultiplied()[3], 13);
+    }
+
+    #[test]
+    fn resize_bands_map_to_directions() {
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let band = RESIZE_BAND;
+        assert_eq!(
+            resize_direction(rect, Pos2::new(2.0, 2.0), band),
+            Some(ResizeDirection::NorthWest)
+        );
+        assert_eq!(
+            resize_direction(rect, Pos2::new(398.0, 198.0), band),
+            Some(ResizeDirection::SouthEast)
+        );
+        assert_eq!(
+            resize_direction(rect, Pos2::new(200.0, 1.0), band),
+            Some(ResizeDirection::North)
+        );
+        assert_eq!(
+            resize_direction(rect, Pos2::new(399.0, 100.0), band),
+            Some(ResizeDirection::East)
+        );
+        assert_eq!(
+            resize_direction(rect, Pos2::new(200.0, 199.0), band),
+            Some(ResizeDirection::South)
+        );
+        assert_eq!(resize_direction(rect, Pos2::new(200.0, 100.0), band), None);
     }
 }

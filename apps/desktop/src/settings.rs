@@ -6,6 +6,17 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
 
+pub const BACKGROUND_PRESETS: [(&str, &str); 8] = [
+    ("Dark", "#101014E6"),
+    ("Black", "#000000E6"),
+    ("Charcoal", "#1F1F24E6"),
+    ("Slate", "#243244E6"),
+    ("Navy", "#0B1B33E6"),
+    ("Forest", "#0C2418E6"),
+    ("Maroon", "#2A1010E6"),
+    ("Plum", "#20102AE6"),
+];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -173,6 +184,23 @@ mod tests {
             toml::from_str("font_size = 20.0\nfuture_key = 1\n").expect("parse");
         assert_eq!(settings.font_size, 20.0);
         assert_eq!(settings.max_lines, Settings::default().max_lines);
+    }
+
+    #[test]
+    fn background_presets_are_valid_and_include_default() {
+        let default = Settings::default();
+        assert!(
+            BACKGROUND_PRESETS
+                .iter()
+                .any(|(_, value)| *value == default.background_color)
+        );
+        for (name, value) in BACKGROUND_PRESETS {
+            assert!(
+                value.len() == 9 && value.starts_with('#'),
+                "{name}: {value}"
+            );
+            assert_eq!(parse_rgba(value)[3], 0xE6, "{name}");
+        }
     }
 
     #[test]

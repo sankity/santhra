@@ -97,10 +97,30 @@ impl Santhra {
     }
 
     fn sync_overlay(&mut self) {
-        let mut state = self.overlay.lock().unwrap();
-        state.update(&self.settings, &self.snapshot);
-        if let Some(pos) = state.pos {
+        let (pos, size) = {
+            let mut state = self.overlay.lock().unwrap();
+            state.update(&self.settings, &self.snapshot);
+            (state.pos, state.size)
+        };
+        if let Some(pos) = pos {
             self.settings.overlay_pos = Some(pos);
+        }
+        if !self.settings_open
+            && self.settings.overlay_enabled
+            && let Some([width, height]) = size
+        {
+            self.settings.overlay_width = width;
+            self.settings.overlay_height = height;
+        }
+    }
+
+    fn sync_overlay_size(&mut self) {
+        if !self.settings.overlay_enabled {
+            return;
+        }
+        if let Some([width, height]) = self.overlay.lock().unwrap().size {
+            self.settings.overlay_width = width;
+            self.settings.overlay_height = height;
         }
     }
 
@@ -122,6 +142,7 @@ impl Santhra {
             });
         self.settings_open = open;
         if !open {
+            self.sync_overlay_size();
             self.save_settings();
         }
     }
@@ -185,11 +206,27 @@ impl Santhra {
                 ui.end_row();
 
                 ui.label("Background");
-                let mut background = color(self.settings.background_rgba());
-                if ui.color_edit_button_srgba(&mut background).changed() {
-                    self.settings.background_color =
-                        settings::to_hex(background.to_srgba_unmultiplied());
-                }
+                ui.horizontal_wrapped(|ui| {
+                    let current = self.settings.background_rgba();
+                    ui.label(RichText::new("■").size(18.0).color(color(current)))
+                        .on_hover_text("Current");
+                    for (name, value) in settings::BACKGROUND_PRESETS {
+                        let rgba = settings::parse_rgba(value);
+                        let selected = rgba == current;
+                        let stroke = if selected {
+                            egui::Stroke::new(2.0, Color32::WHITE)
+                        } else {
+                            egui::Stroke::new(1.0, Color32::GRAY)
+                        };
+                        let swatch = egui::Button::new("")
+                            .fill(color(rgba))
+                            .min_size(egui::vec2(26.0, 18.0))
+                            .stroke(stroke);
+                        if ui.add(swatch).on_hover_text(name).clicked() {
+                            self.settings.background_color = value.to_owned();
+                        }
+                    }
+                });
                 ui.end_row();
 
                 ui.label("Partial text");
@@ -312,6 +349,7 @@ impl eframe::App for Santhra {
 
 impl Drop for Santhra {
     fn drop(&mut self) {
+        self.sync_overlay_size();
         let _ = self.settings.save();
     }
 }

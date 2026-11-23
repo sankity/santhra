@@ -60,8 +60,8 @@ to reset.
 ### Floating overlay
 
 The overlay is an undecorated, translucent caption window. On Wayland it can float, be dragged,
-and click through, but always-on-top and position restore are not supported by winit.
-`docs/overlay-support.md` has the full capability matrix.
+resized from any edge, and click through, but always-on-top and position restore are not supported
+by winit. `docs/overlay-support.md` has the full capability matrix.
 
 ## Testing
 
