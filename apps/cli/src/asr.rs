@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, Wave};
+use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream, Wave};
+
+pub const SAMPLE_RATE: i32 = 16_000;
 
 pub struct ModelFiles {
     encoder: String,
@@ -78,11 +80,73 @@ impl Default for AsrOptions {
     }
 }
 
+#[derive(Default)]
+pub struct Events {
+    pub partial: String,
+    pub finals: Vec<String>,
+}
+
+pub struct Transcriber {
+    recognizer: OnlineRecognizer,
+    stream: OnlineStream,
+    last_partial: String,
+}
+
+impl Transcriber {
+    pub fn new(model: &ModelFiles, opts: &AsrOptions) -> Result<Self> {
+        let recognizer = model.recognizer(opts)?;
+        let stream = recognizer.create_stream();
+        Ok(Self {
+            recognizer,
+            stream,
+            last_partial: String::new(),
+        })
+    }
+
+    pub fn push(&mut self, samples: &[f32]) -> Events {
+        if !samples.is_empty() {
+            self.stream.accept_waveform(SAMPLE_RATE, samples);
+        }
+        self.decode_ready()
+    }
+
+    pub fn finish(&mut self) -> Events {
+        self.stream.input_finished();
+        let mut events = self.decode_ready();
+        if !self.last_partial.trim().is_empty() {
+            events.finals.push(std::mem::take(&mut self.last_partial));
+        }
+        events
+    }
+
+    fn decode_ready(&mut self) -> Events {
+        let mut events = Events::default();
+        while self.recognizer.is_ready(&self.stream) {
+            self.recognizer.decode(&self.stream);
+            let Some(result) = self.recognizer.get_result(&self.stream) else {
+                continue;
+            };
+            if !result.text.is_empty() {
+                events.partial = result.text.clone();
+                self.last_partial = result.text.clone();
+            }
+            if self.recognizer.is_endpoint(&self.stream) {
+                if !result.text.trim().is_empty() {
+                    events.finals.push(result.text.clone());
+                }
+                events.partial.clear();
+                self.last_partial.clear();
+                self.recognizer.reset(&self.stream);
+            }
+        }
+        events
+    }
+}
+
 pub fn chunk_size(sample_rate: i32, chunk_ms: u32) -> usize {
     ((sample_rate as usize * chunk_ms as usize) / 1000).max(1)
 }
 
-/// Feed the waveform in chunks (simulating streaming) and report partial/final text.
 pub fn transcribe(
     wave: &Wave,
     model: &ModelFiles,
@@ -91,34 +155,24 @@ pub fn transcribe(
     mut on_final: impl FnMut(&str),
 ) -> Result<()> {
     let sample_rate = wave.sample_rate();
-    if sample_rate != 16000 {
-        bail!("expected 16 kHz mono WAV, got {sample_rate} Hz (resampling lands in Phase 2)");
+    if sample_rate != SAMPLE_RATE {
+        bail!("expected 16 kHz mono WAV, got {sample_rate} Hz (resampling lands in Phase 6)");
     }
-    let recognizer = model.recognizer(opts)?;
-    let stream = recognizer.create_stream();
+    let mut transcriber = Transcriber::new(model, opts)?;
     let chunk = chunk_size(sample_rate, opts.chunk_ms);
 
-    for part in wave.samples().chunks(chunk) {
-        stream.accept_waveform(sample_rate, part);
-        while recognizer.is_ready(&stream) {
-            recognizer.decode(&stream);
-            if let Some(result) = recognizer.get_result(&stream) {
-                on_partial(&result.text);
-                if recognizer.is_endpoint(&stream) {
-                    on_final(&result.text);
-                    recognizer.reset(&stream);
-                }
-            }
+    let mut emit = |events: Events| {
+        if !events.partial.is_empty() {
+            on_partial(&events.partial);
         }
+        for text in events.finals {
+            on_final(&text);
+        }
+    };
+    for part in wave.samples().chunks(chunk) {
+        emit(transcriber.push(part));
     }
-
-    stream.input_finished();
-    while recognizer.is_ready(&stream) {
-        recognizer.decode(&stream);
-    }
-    if let Some(result) = recognizer.get_result(&stream) {
-        on_final(&result.text);
-    }
+    emit(transcriber.finish());
     Ok(())
 }
 
