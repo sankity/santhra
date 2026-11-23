@@ -151,8 +151,7 @@ pub fn transcribe(
     wave: &Wave,
     model: &ModelFiles,
     opts: &AsrOptions,
-    mut on_partial: impl FnMut(&str),
-    mut on_final: impl FnMut(&str),
+    mut on_events: impl FnMut(Events),
 ) -> Result<()> {
     let sample_rate = wave.sample_rate();
     if sample_rate != SAMPLE_RATE {
@@ -161,18 +160,10 @@ pub fn transcribe(
     let mut transcriber = Transcriber::new(model, opts)?;
     let chunk = chunk_size(sample_rate, opts.chunk_ms);
 
-    let mut emit = |events: Events| {
-        if !events.partial.is_empty() {
-            on_partial(&events.partial);
-        }
-        for text in events.finals {
-            on_final(&text);
-        }
-    };
     for part in wave.samples().chunks(chunk) {
-        emit(transcriber.push(part));
+        on_events(transcriber.push(part));
     }
-    emit(transcriber.finish());
+    on_events(transcriber.finish());
     Ok(())
 }
 
@@ -199,16 +190,14 @@ mod tests {
         let model = ModelFiles::load(Path::new(&dir)).expect("model files");
         let wave = Wave::read(&format!("{dir}/test_wavs/0.wav")).expect("read wav");
         let mut text = String::new();
-        transcribe(
-            &wave,
-            &model,
-            &AsrOptions::default(),
-            |_| {},
-            |t| {
-                text.push_str(t);
+        transcribe(&wave, &model, &AsrOptions::default(), |events| {
+            text.push_str(&events.partial);
+            text.push(' ');
+            for final_text in events.finals {
+                text.push_str(&final_text);
                 text.push(' ');
-            },
-        )
+            }
+        })
         .expect("transcribe");
         assert!(
             text.split_whitespace().count() >= 3,

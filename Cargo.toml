@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/cli"]
+members = ["apps/cli", "crates/caption-core"]
 resolver = "3"
 
 [workspace.package]

@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use caption_core::{CaptionConfig, CaptionEvent, Captions};
 use clap::{Args, Parser, Subcommand};
 use sherpa_onnx::Wave;
 
@@ -53,6 +54,13 @@ struct Common {
     #[arg(long, default_value = "cpu")]
     provider: String,
 
+    #[arg(
+        long,
+        default_value_t = 2,
+        help = "Final caption lines kept in the caption state"
+    )]
+    max_lines: usize,
+
     #[arg(long, help = "Only print final segments")]
     no_partial: bool,
 }
@@ -65,16 +73,33 @@ impl Common {
             provider: self.provider.clone(),
         }
     }
+
+    fn captions(&self) -> Captions {
+        Captions::new(CaptionConfig {
+            max_lines: self.max_lines,
+            show_partial: !self.no_partial,
+        })
+    }
 }
 
-fn print_events(events: asr::Events, no_partial: bool) {
-    for text in events.finals {
-        print!("\r\x1b[K");
-        println!("[final] {}", text.trim());
+fn render(event: Option<CaptionEvent>) {
+    match event {
+        Some(CaptionEvent::Final { text, .. }) => {
+            print!("\r\x1b[K");
+            println!("[final] {text}");
+        }
+        Some(CaptionEvent::Partial(text)) if !text.is_empty() => {
+            print!("\r\x1b[K{text}");
+            let _ = io::stdout().flush();
+        }
+        _ => {}
     }
-    if !no_partial && !events.partial.trim().is_empty() {
-        print!("\r\x1b[K{}", events.partial.trim());
-        let _ = io::stdout().flush();
+}
+
+fn feed(captions: &mut Captions, events: asr::Events) {
+    render(captions.set_partial(&events.partial));
+    for text in events.finals {
+        render(captions.add_final(&text));
     }
 }
 
@@ -82,34 +107,22 @@ fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
     let model = asr::ModelFiles::load(&common.model_dir)?;
     let wave = Wave::read(&wav.display().to_string())
         .with_context(|| format!("cannot read WAV: {}", wav.display()))?;
-    asr::transcribe(
-        &wave,
-        &model,
-        &common.options(),
-        |text| {
-            if !common.no_partial {
-                print!("\r\x1b[K{}", text.trim());
-                let _ = io::stdout().flush();
-            }
-        },
-        |text| {
-            if !text.trim().is_empty() {
-                print!("\r\x1b[K");
-                println!("[final] {}", text.trim());
-            }
-        },
-    )
+    let mut captions = common.captions();
+    asr::transcribe(&wave, &model, &common.options(), |events| {
+        feed(&mut captions, events)
+    })
 }
 
 fn live(target: Option<String>, common: Common) -> Result<()> {
     let model = asr::ModelFiles::load(&common.model_dir)?;
     let mut transcriber = asr::Transcriber::new(&model, &common.options())?;
     let capture = capture::spawn(target)?;
+    let mut captions = common.captions();
 
     for chunk in capture.rx.iter() {
-        print_events(transcriber.push(&chunk), common.no_partial);
+        feed(&mut captions, transcriber.push(&chunk));
     }
-    print_events(transcriber.finish(), common.no_partial);
+    feed(&mut captions, transcriber.finish());
     print!("\r\x1b[K");
 
     let dropped = capture.dropped.load(std::sync::atomic::Ordering::Relaxed);

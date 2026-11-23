@@ -172,6 +172,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "caption-core"
+version = "0.1.0"
+
+[[package]]
 name = "cc"
 version = "1.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1408,6 +1412,7 @@ name = "voxera-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caption-core",
  "clap",
  "pipewire",
  "sherpa-onnx",
