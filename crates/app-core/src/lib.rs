@@ -37,7 +37,7 @@ impl Session {
         let (tx, rx) = mpsc::channel();
 
         let asr = std::thread::Builder::new()
-            .name("voxera-asr".into())
+            .name("santhra-asr".into())
             .spawn(move || {
                 let asr_opts = AsrOptions {
                     chunk_ms: 100,

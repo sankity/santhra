@@ -179,12 +179,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the model; set VOXERA_MODEL_DIR to the model directory"]
+    #[ignore = "needs the model; set SANTHRA_MODEL_DIR to the model directory"]
     fn transcribes_sample_wav() {
         // cargo runs tests with CWD = apps/cli, so resolve relative paths from the workspace root
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root
-            .join(std::env::var("VOXERA_MODEL_DIR").expect("VOXERA_MODEL_DIR"))
+            .join(std::env::var("SANTHRA_MODEL_DIR").expect("SANTHRA_MODEL_DIR"))
             .display()
             .to_string();
         let model = ModelFiles::load(Path::new(&dir)).expect("model files");

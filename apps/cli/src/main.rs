@@ -12,9 +12,9 @@ const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2
 
 #[derive(Parser)]
 #[command(
-    name = "voxera-cli",
+    name = "santhra-cli",
     version,
-    about = "Voxera live caption PoC: offline system audio transcription"
+    about = "Santhra live caption PoC: offline system audio transcription"
 )]
 struct Cli {
     #[command(subcommand)]

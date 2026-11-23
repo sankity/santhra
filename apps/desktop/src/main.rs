@@ -6,13 +6,13 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])
-            .with_title("Voxera")
+            .with_title("Santhra")
             .with_transparent(true),
         ..Default::default()
     };
     eframe::run_native(
-        "Voxera",
+        "Santhra",
         options,
-        Box::new(|cc| Ok(Box::new(app::Voxera::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::Santhra::new(cc)))),
     )
 }

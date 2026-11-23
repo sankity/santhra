@@ -16,4 +16,4 @@ Verified on GNOME/Wayland, Intel UHD 620, wgpu/Vulkan. The settings window warns
 Wayland gaps when `WAYLAND_DISPLAY` is set.
 
 To check the X11-only features: log into an X11 session and run
-`cargo run -p voxera-desktop`, then enable the overlay and toggle always-on-top.
+`cargo run -p santhra-desktop`, then enable the overlay and toggle always-on-top.

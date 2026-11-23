@@ -1,11 +1,11 @@
 [package]
-name = "voxera-desktop"
+name = "santhra-desktop"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "voxera-desktop"
+name = "santhra-desktop"
 path = "src/main.rs"
 
 [dependencies]

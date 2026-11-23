@@ -7,7 +7,7 @@ use eframe::egui::{self, Align, Color32, Layout, RichText};
 use crate::overlay;
 use crate::settings::{self, Settings};
 
-pub struct Voxera {
+pub struct Santhra {
     settings: Settings,
     settings_open: bool,
     sinks: Option<Vec<audio_linux::Sink>>,
@@ -17,7 +17,7 @@ pub struct Voxera {
     model_ok: bool,
 }
 
-impl Voxera {
+impl Santhra {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let settings = Settings::load();
         let model_ok =
@@ -206,7 +206,7 @@ impl Voxera {
     }
 }
 
-impl eframe::App for Voxera {
+impl eframe::App for Santhra {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -261,7 +261,7 @@ impl eframe::App for Voxera {
     }
 }
 
-impl Drop for Voxera {
+impl Drop for Santhra {
     fn drop(&mut self) {
         let _ = self.settings.save();
     }

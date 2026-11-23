@@ -59,7 +59,7 @@ impl Settings {
             .filter(|path| path.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
             .unwrap_or_else(|| PathBuf::from("."));
-        base.join("voxera").join("config.toml")
+        base.join("santhra").join("config.toml")
     }
 
     pub fn load() -> Self {
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn roundtrip_through_file() {
-        let dir = std::env::temp_dir().join(format!("voxera-settings-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("santhra-settings-{}", std::process::id()));
         let path = dir.join("config.toml");
         let settings = Settings {
             font_size: 18.0,
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn defaults_save_and_load() {
-        let dir = std::env::temp_dir().join(format!("voxera-defaults-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("santhra-defaults-{}", std::process::id()));
         let path = dir.join("config.toml");
         let settings = Settings::default();
         settings.save_to(&path).expect("save defaults");
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn corrupt_file_falls_back_to_defaults() {
-        let dir = std::env::temp_dir().join(format!("voxera-corrupt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("santhra-corrupt-{}", std::process::id()));
         let path = dir.join("config.toml");
         fs::create_dir_all(&dir).expect("dir");
         fs::write(&path, "this is [ not toml").expect("write");

@@ -5,7 +5,7 @@ use crate::app::caption_labels;
 use crate::settings::Settings;
 
 pub fn viewport_id() -> egui::ViewportId {
-    egui::ViewportId::from_hash_of("voxera-overlay")
+    egui::ViewportId::from_hash_of("santhra-overlay")
 }
 
 pub fn bg_color(settings: &Settings) -> Color32 {
@@ -20,7 +20,7 @@ pub fn show(ctx: &egui::Context, settings: &mut Settings, snapshot: &CaptionSnap
     }
 
     let mut builder = egui::ViewportBuilder::default()
-        .with_title("Voxera captions")
+        .with_title("Santhra captions")
         .with_inner_size([settings.overlay_width, settings.overlay_height])
         .with_decorations(false)
         .with_resizable(false)

@@ -70,7 +70,7 @@ fn run(
         props.insert(*pw::keys::TARGET_OBJECT, target);
     }
 
-    let stream = pw::stream::StreamBox::new(&core, "voxera-capture", props)?;
+    let stream = pw::stream::StreamBox::new(&core, "santhra-capture", props)?;
 
     let _listener = stream
         .add_local_listener_with_user_data(AudioInfoRaw::default())
