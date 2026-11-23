@@ -82,7 +82,7 @@ impl Default for AsrOptions {
 
 #[derive(Default)]
 pub struct Events {
-    pub partial: String,
+    pub partial: Option<String>,
     pub finals: Vec<String>,
 }
 
@@ -127,14 +127,14 @@ impl Transcriber {
                 continue;
             };
             if !result.text.is_empty() {
-                events.partial = result.text.clone();
+                events.partial = Some(result.text.clone());
                 self.last_partial = result.text.clone();
             }
             if self.recognizer.is_endpoint(&self.stream) {
                 if !result.text.trim().is_empty() {
                     events.finals.push(result.text.clone());
                 }
-                events.partial.clear();
+                events.partial = Some(String::new());
                 self.last_partial.clear();
                 self.recognizer.reset(&self.stream);
             }
@@ -191,8 +191,10 @@ mod tests {
         let wave = Wave::read(&format!("{dir}/test_wavs/0.wav")).expect("read wav");
         let mut text = String::new();
         transcribe(&wave, &model, &AsrOptions::default(), |events| {
-            text.push_str(&events.partial);
-            text.push(' ');
+            if let Some(partial) = &events.partial {
+                text.push_str(partial);
+                text.push(' ');
+            }
             for final_text in events.finals {
                 text.push_str(&final_text);
                 text.push(' ');
@@ -202,6 +204,36 @@ mod tests {
         assert!(
             text.split_whitespace().count() >= 3,
             "transcript too short: {text:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs the model; set SANTHRA_MODEL_DIR to the model directory"]
+    fn streams_partials_without_blanking_them() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = root
+            .join(std::env::var("SANTHRA_MODEL_DIR").expect("SANTHRA_MODEL_DIR"))
+            .display()
+            .to_string();
+        let model = ModelFiles::load(Path::new(&dir)).expect("model files");
+        let wave = Wave::read(&format!("{dir}/test_wavs/0.wav")).expect("read wav");
+        let mut transcriber =
+            Transcriber::new(&model, &AsrOptions::default()).expect("transcriber");
+        let chunk = chunk_size(SAMPLE_RATE, 100);
+
+        let mut shown = 0;
+        let mut quiet_pushes = 0;
+        for part in wave.samples().chunks(chunk) {
+            match transcriber.push(part).partial {
+                Some(text) if !text.trim().is_empty() => shown += 1,
+                Some(_) => {}
+                None => quiet_pushes += 1,
+            }
+        }
+        assert!(shown >= 3, "only {shown} partial results while streaming");
+        assert!(
+            quiet_pushes > 0,
+            "no push without a new result; the None contract was not exercised"
         );
     }
 }

@@ -126,7 +126,9 @@ fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
     let mut captions = common.captions();
     let mut printer = Printer::default();
     speech_sherpa::transcribe(&wave, &model, &common.options(), |events| {
-        captions.set_partial(&events.partial);
+        if let Some(partial) = &events.partial {
+            captions.set_partial(partial);
+        }
         for text in events.finals {
             captions.add_final(&text);
         }

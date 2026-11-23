@@ -63,7 +63,9 @@ impl Session {
                     show_partial: opts.show_partial,
                 });
                 let mut feed = |events: speech_sherpa::Events| {
-                    captions.set_partial(&events.partial);
+                    if let Some(partial) = &events.partial {
+                        captions.set_partial(partial);
+                    }
                     for text in events.finals {
                         captions.add_final(&text);
                     }
