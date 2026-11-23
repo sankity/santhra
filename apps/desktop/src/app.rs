@@ -4,6 +4,7 @@ use app_core::{Message, Session};
 use caption_core::CaptionSnapshot;
 use eframe::egui::{self, Align, Color32, Layout, RichText};
 
+use crate::overlay;
 use crate::settings::{self, Settings};
 
 pub struct Voxera {
@@ -99,6 +100,7 @@ impl Voxera {
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
+            .default_width(520.0)
             .show(ctx, |ui| self.settings_body(ui));
         self.settings_open = open;
         if !open {
@@ -172,6 +174,32 @@ impl Voxera {
                 ui.end_row();
             });
 
+        ui.separator();
+        ui.checkbox(&mut self.settings.overlay_enabled, "Show floating overlay");
+        ui.add_enabled_ui(self.settings.overlay_enabled, |ui| {
+            ui.checkbox(
+                &mut self.settings.overlay_always_on_top,
+                "Always on top (X11 only)",
+            );
+            ui.checkbox(&mut self.settings.overlay_click_through, "Click-through");
+            ui.add(
+                egui::Slider::new(&mut self.settings.overlay_opacity, 0.1..=1.0)
+                    .text("background opacity"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.settings.overlay_width, 240.0..=1600.0)
+                    .text("width"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.settings.overlay_height, 80.0..=600.0).text("height"),
+            );
+            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                ui.weak(
+                    "Wayland: always-on-top is up to the compositor and position is not restorable.",
+                );
+            }
+        });
+
         ui.add_space(8.0);
         ui.label("Model and thread changes apply on the next start.");
         ui.label(format!("Config: {}", Settings::path().display()));
@@ -193,6 +221,8 @@ impl eframe::App for Voxera {
                     self.stop();
                 }
                 ui.separator();
+                ui.toggle_value(&mut self.settings.overlay_enabled, "Overlay");
+                ui.separator();
                 ui.label(&self.status);
                 if !self.model_ok {
                     ui.colored_label(Color32::RED, "model files not found");
@@ -206,39 +236,16 @@ impl eframe::App for Voxera {
         });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            let fg = color(self.settings.text_rgba());
-            let bg = color(self.settings.background_rgba());
             egui::Frame::NONE
-                .fill(bg)
+                .fill(color(self.settings.background_rgba()))
                 .inner_margin(16.0)
                 .show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    if self.snapshot.finals.is_empty() && self.snapshot.partial.is_empty() {
-                        ui.label(
-                            RichText::new("No captions yet. Press Start, then play something.")
-                                .color(fg)
-                                .size(18.0),
-                        );
-                    }
-                    for line in &self.snapshot.finals {
-                        ui.label(
-                            RichText::new(&line.text)
-                                .color(fg)
-                                .size(self.settings.font_size),
-                        );
-                    }
-                    if self.settings.show_partial && !self.snapshot.partial.is_empty() {
-                        ui.label(
-                            RichText::new(&self.snapshot.partial)
-                                .color(fg)
-                                .size(self.settings.font_size)
-                                .italics(),
-                        );
-                    }
+                    caption_labels(ui, &self.settings, &self.snapshot);
                 });
         });
 
+        overlay::show(ui.ctx(), &mut self.settings, &self.snapshot);
         self.settings_window(ui.ctx());
     }
 
@@ -248,11 +255,39 @@ impl eframe::App for Voxera {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
 }
 
 impl Drop for Voxera {
     fn drop(&mut self) {
         let _ = self.settings.save();
+    }
+}
+
+pub(crate) fn caption_labels(ui: &mut egui::Ui, settings: &Settings, snapshot: &CaptionSnapshot) {
+    let fg = color(settings.text_rgba());
+    ui.spacing_mut().item_spacing.y = 6.0;
+    if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
+        ui.label(
+            RichText::new("No captions yet. Press Start, then play something.")
+                .color(fg)
+                .size(18.0),
+        );
+        return;
+    }
+    for line in &snapshot.finals {
+        ui.label(RichText::new(&line.text).color(fg).size(settings.font_size));
+    }
+    if settings.show_partial && !snapshot.partial.is_empty() {
+        ui.label(
+            RichText::new(&snapshot.partial)
+                .color(fg)
+                .size(settings.font_size)
+                .italics(),
+        );
     }
 }
 
