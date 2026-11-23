@@ -6,7 +6,8 @@ license.workspace = true
 
 [dependencies]
 sherpa-onnx = "2.0.3"
-caption-core = { path = "../../crates/caption-core" }
-pipewire = { version = "0.10", features = ["v0_3_44"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+app-core = { path = "../../crates/app-core" }
+caption-core = { path = "../../crates/caption-core" }
+speech-sherpa = { path = "../../crates/speech-sherpa" }

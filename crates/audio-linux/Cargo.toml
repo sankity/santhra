@@ -1,0 +1,9 @@
+[package]
+name = "audio-linux"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+pipewire = { version = "0.10", features = ["v0_3_44"] }

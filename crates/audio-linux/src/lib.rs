@@ -1,4 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -18,7 +20,13 @@ pub struct Capture {
     pub dropped: Arc<AtomicU64>,
 }
 
-pub fn spawn(target: Option<String>) -> Result<Capture> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sink {
+    pub name: String,
+    pub description: String,
+}
+
+pub fn spawn(target: Option<String>, stop: Arc<AtomicBool>) -> Result<Capture> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_CHUNKS);
     let dropped = Arc::new(AtomicU64::new(0));
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -27,7 +35,7 @@ pub fn spawn(target: Option<String>) -> Result<Capture> {
     std::thread::Builder::new()
         .name("pipewire-capture".into())
         .spawn(move || {
-            if let Err(err) = run(tx, thread_dropped, target, ready_tx.clone()) {
+            if let Err(err) = run(tx, thread_dropped, target, stop, ready_tx.clone()) {
                 let _ = ready_tx.send(Err(err.to_string()));
             }
         })?;
@@ -43,6 +51,7 @@ fn run(
     tx: mpsc::SyncSender<Vec<f32>>,
     dropped: Arc<AtomicU64>,
     target: Option<String>,
+    stop: Arc<AtomicBool>,
     ready: mpsc::Sender<Result<(), String>>,
 ) -> Result<(), pw::Error> {
     pw::init();
@@ -124,8 +133,82 @@ fn run(
     )?;
 
     ready.send(Ok(())).ok();
-    mainloop.run();
+    while !stop.load(Ordering::Relaxed) {
+        mainloop
+            .loop_()
+            .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(200)));
+    }
     Ok(())
+}
+
+pub fn list_sinks() -> Vec<Sink> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(enumerate_sinks());
+    });
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
+}
+
+fn enumerate_sinks() -> Vec<Sink> {
+    let Ok(mainloop) = pw::main_loop::MainLoopRc::new(None) else {
+        return Vec::new();
+    };
+    let Ok(context) = pw::context::ContextRc::new(&mainloop, None) else {
+        return Vec::new();
+    };
+    let Ok(core) = context.connect_rc(None) else {
+        return Vec::new();
+    };
+    let Ok(registry) = core.get_registry() else {
+        return Vec::new();
+    };
+    let Ok(pending) = core.sync(0) else {
+        return Vec::new();
+    };
+
+    let sinks = Rc::new(RefCell::new(Vec::new()));
+    let done = Rc::new(Cell::new(false));
+
+    let _core_listener = core
+        .add_listener_local()
+        .done({
+            let done = done.clone();
+            let mainloop = mainloop.clone();
+            move |id, seq| {
+                if id == pw::core::PW_ID_CORE && seq == pending {
+                    done.set(true);
+                    mainloop.quit();
+                }
+            }
+        })
+        .register();
+
+    let _registry_listener = registry
+        .add_listener_local()
+        .global({
+            let sinks = sinks.clone();
+            move |global| {
+                let Some(props) = global.props else { return };
+                if props.get(*pw::keys::MEDIA_CLASS) != Some("Audio/Sink") {
+                    return;
+                }
+                let Some(name) = props.get(*pw::keys::NODE_NAME) else {
+                    return;
+                };
+                let description = props
+                    .get(*pw::keys::NODE_DESCRIPTION)
+                    .or_else(|| props.get(*pw::keys::NODE_NICK))
+                    .unwrap_or(name);
+                sinks.borrow_mut().push(Sink {
+                    name: name.to_string(),
+                    description: description.to_string(),
+                });
+            }
+        })
+        .register();
+
+    mainloop.run();
+    sinks.borrow().clone()
 }
 
 pub fn to_mono(bytes: &[u8], channels: usize) -> Vec<f32> {
@@ -165,6 +248,18 @@ mod tests {
         assert_eq!(
             to_mono(&[1, 2, 3, 4, 5], 1),
             vec![f32::from_le_bytes([1, 2, 3, 4])]
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a running PipeWire session"]
+    fn lists_sinks() {
+        let sinks = list_sinks();
+        assert!(!sinks.is_empty(), "no Audio/Sink found");
+        assert!(
+            sinks
+                .iter()
+                .all(|sink| !sink.name.is_empty() && !sink.description.is_empty())
         );
     }
 }

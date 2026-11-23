@@ -1,13 +1,12 @@
-mod asr;
-mod capture;
-
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use caption_core::{CaptionConfig, CaptionEvent, Captions};
+use anyhow::{Context, Result, bail};
+use app_core::{Message, Session, SessionOptions};
+use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
 use clap::{Args, Parser, Subcommand};
 use sherpa_onnx::Wave;
+use speech_sherpa::{AsrOptions, ModelFiles};
 
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
 
@@ -66,8 +65,8 @@ struct Common {
 }
 
 impl Common {
-    fn options(&self) -> asr::AsrOptions {
-        asr::AsrOptions {
+    fn options(&self) -> AsrOptions {
+        AsrOptions {
             chunk_ms: self.chunk_ms,
             threads: self.threads,
             provider: self.provider.clone(),
@@ -80,54 +79,75 @@ impl Common {
             show_partial: !self.no_partial,
         })
     }
-}
 
-fn render(event: Option<CaptionEvent>) {
-    match event {
-        Some(CaptionEvent::Final { text, .. }) => {
-            print!("\r\x1b[K");
-            println!("[final] {text}");
+    fn session_options(&self, target: Option<String>) -> SessionOptions {
+        SessionOptions {
+            target,
+            model_dir: self.model_dir.clone(),
+            threads: self.threads,
+            provider: self.provider.clone(),
+            max_lines: self.max_lines,
+            show_partial: !self.no_partial,
         }
-        Some(CaptionEvent::Partial(text)) if !text.is_empty() => {
-            print!("\r\x1b[K{text}");
-            let _ = io::stdout().flush();
-        }
-        _ => {}
     }
 }
 
-fn feed(captions: &mut Captions, events: asr::Events) {
-    render(captions.set_partial(&events.partial));
-    for text in events.finals {
-        render(captions.add_final(&text));
+#[derive(Default)]
+struct Printer {
+    last_final: u64,
+    partial: String,
+}
+
+impl Printer {
+    fn show(&mut self, snapshot: &CaptionSnapshot) {
+        for line in &snapshot.finals {
+            if line.id > self.last_final {
+                print!("\r\x1b[K");
+                println!("[final] {}", line.text);
+                self.last_final = line.id;
+            }
+        }
+        if snapshot.partial != self.partial {
+            if snapshot.partial.is_empty() {
+                print!("\r\x1b[K");
+            } else {
+                print!("\r\x1b[K{}", snapshot.partial);
+            }
+            let _ = io::stdout().flush();
+            self.partial = snapshot.partial.clone();
+        }
     }
 }
 
 fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
-    let model = asr::ModelFiles::load(&common.model_dir)?;
+    let model = ModelFiles::load(&common.model_dir)?;
     let wave = Wave::read(&wav.display().to_string())
         .with_context(|| format!("cannot read WAV: {}", wav.display()))?;
     let mut captions = common.captions();
-    asr::transcribe(&wave, &model, &common.options(), |events| {
-        feed(&mut captions, events)
+    let mut printer = Printer::default();
+    speech_sherpa::transcribe(&wave, &model, &common.options(), |events| {
+        captions.set_partial(&events.partial);
+        for text in events.finals {
+            captions.add_final(&text);
+        }
+        printer.show(&captions.snapshot());
     })
 }
 
 fn live(target: Option<String>, common: Common) -> Result<()> {
-    let model = asr::ModelFiles::load(&common.model_dir)?;
-    let mut transcriber = asr::Transcriber::new(&model, &common.options())?;
-    let capture = capture::spawn(target)?;
-    let mut captions = common.captions();
-
-    for chunk in capture.rx.iter() {
-        feed(&mut captions, transcriber.push(&chunk));
-    }
-    feed(&mut captions, transcriber.finish());
-    print!("\r\x1b[K");
-
-    let dropped = capture.dropped.load(std::sync::atomic::Ordering::Relaxed);
-    if dropped > 0 {
-        eprintln!("warning: dropped {dropped} audio chunks (ASR could not keep up)");
+    let session = Session::start(common.session_options(target))?;
+    let mut printer = Printer::default();
+    for message in session.messages() {
+        match message {
+            Message::Captions(snapshot) => printer.show(&snapshot),
+            Message::Stopped { dropped } => {
+                print!("\r\x1b[K");
+                if dropped > 0 {
+                    eprintln!("warning: dropped {dropped} audio chunks (ASR could not keep up)");
+                }
+            }
+            Message::Failed(err) => bail!(err),
+        }
     }
     Ok(())
 }

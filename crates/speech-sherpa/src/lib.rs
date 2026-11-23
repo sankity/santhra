@@ -155,7 +155,7 @@ pub fn transcribe(
 ) -> Result<()> {
     let sample_rate = wave.sample_rate();
     if sample_rate != SAMPLE_RATE {
-        bail!("expected 16 kHz mono WAV, got {sample_rate} Hz (resampling lands in Phase 6)");
+        bail!("expected 16 kHz mono WAV, got {sample_rate} Hz (resampling is not implemented yet)");
     }
     let mut transcriber = Transcriber::new(model, opts)?;
     let chunk = chunk_size(sample_rate, opts.chunk_ms);

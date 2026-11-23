@@ -1,5 +1,12 @@
 [workspace]
-members = ["apps/cli", "crates/caption-core"]
+members = [
+    "apps/cli",
+    "apps/desktop",
+    "crates/app-core",
+    "crates/audio-linux",
+    "crates/caption-core",
+    "crates/speech-sherpa",
+]
 resolver = "3"
 
 [workspace.package]

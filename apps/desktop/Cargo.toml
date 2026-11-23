@@ -1,0 +1,19 @@
+[package]
+name = "voxera-desktop"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "voxera-desktop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+eframe = "0.37"
+app-core = { path = "../../crates/app-core" }
+audio-linux = { path = "../../crates/audio-linux" }
+caption-core = { path = "../../crates/caption-core" }
+speech-sherpa = { path = "../../crates/speech-sherpa" }

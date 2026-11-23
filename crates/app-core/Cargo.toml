@@ -1,0 +1,11 @@
+[package]
+name = "app-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+audio-linux = { path = "../audio-linux" }
+caption-core = { path = "../caption-core" }
+speech-sherpa = { path = "../speech-sherpa" }
