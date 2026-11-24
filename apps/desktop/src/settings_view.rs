@@ -1,287 +1,104 @@
 use rune::tok::{self, type_};
-use rune::{Cx, El, ScrollSpec, col, el, row, text};
-use rune_kit::{Kit, Menu, MenuItem, root};
+use rune::{Cx, El, ScrollSpec, Tx, col, row, text};
+use rune_kit::{
+    Badge, BadgeVariant, Button, ButtonVariant, Card, Combobox, ComboboxOption, Field, Kit,
+    Progress, SidebarRow, Slider, Switch, TextInput, Toolbar, root,
+};
 use santhra_models::{Language, catalog, entry, model_dir};
 
 use crate::app::{
-    DownloadStatus, FontChoice, Picker, Screen, SettingsTab, Shared, State, cancel_download,
-    leaked_family, refresh_model, rgba, start_download, toggle_overlay, use_model,
+    DownloadStatus, FontChoice, Screen, SettingsTab, Shared, State, cancel_download, leaked_family,
+    refresh_model, start_download, toggle_overlay, use_model,
 };
 use crate::fonts;
 use crate::settings::{self, Settings};
-use crate::widgets::{button, section, slider, text_field, toggle_row};
-
-const MAX_FONT_OPTIONS: usize = 60;
-
-type Item = (String, bool, Box<dyn for<'a> Fn(&'a mut State)>);
-
-struct MenuCtx<'a> {
-    kit: &'a Kit,
-    overlays: &'a mut Vec<El>,
-}
-
-struct Items {
-    audio: Vec<Item>,
-    font: Vec<Item>,
-    language: Vec<Item>,
-    model: Vec<Item>,
-}
 
 pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
     let shared = Shared::get();
     let settings = shared.settings();
-
-    let audio = if s.picker == Some(Picker::Source) {
-        {
-            let mut sinks = shared.sinks.lock().unwrap();
-            if sinks.is_none() {
-                *sinks = Some(audio_linux::list_sinks());
-            }
+    let sinks = {
+        let mut guard = shared.sinks.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(audio_linux::list_sinks());
         }
-        let sinks = { shared.sinks.lock().unwrap().clone().unwrap_or_default() };
-        let mut items: Vec<Item> = vec![(
-            "Default sink".into(),
-            settings.target.is_none(),
-            Box::new(|s| set_source(s, None)),
-        )];
-        for sink in sinks {
-            let name = sink.name.clone();
-            let selected = settings.target.as_deref() == Some(name.as_str());
-            items.push((
-                sink.description,
-                selected,
-                Box::new(move |s| set_source(s, Some(name.clone()))),
-            ));
-        }
-        items
-    } else {
-        Vec::new()
+        guard.clone().unwrap_or_default()
     };
-
-    let font = if s.picker == Some(Picker::Font) {
-        let query = s.font_query.text.trim().to_lowercase();
-        let selected_font = settings.font_family.as_deref().unwrap_or("");
-        let mut names: Vec<&str> = fonts::families()
-            .iter()
-            .map(String::as_str)
-            .filter(|name| query.is_empty() || name.to_lowercase().contains(&query))
-            .collect();
-        if !selected_font.is_empty() && !names.contains(&selected_font) {
-            names.insert(0, selected_font);
-        }
-        let mut items: Vec<Item> = vec![(
-            "System default".into(),
-            settings.font_family.is_none(),
-            Box::new(|s| set_font(s, None)),
-        )];
-        for name in names.into_iter().take(MAX_FONT_OPTIONS) {
-            let name = name.to_owned();
-            let selected = settings.font_family.as_deref() == Some(name.as_str());
-            items.push((
-                name.clone(),
-                selected,
-                Box::new(move |s| set_font(s, Some(name.clone()))),
-            ));
-        }
-        items
-    } else {
-        Vec::new()
-    };
-
-    let language: Vec<Item> = if s.picker == Some(Picker::Language) {
-        Language::ALL
-            .iter()
-            .map(|lang| {
-                let id = lang.as_str();
-                (
-                    lang.label().to_owned(),
-                    settings.language.as_deref() == Some(id),
-                    Box::new(move |s: &mut State| set_language(s, id))
-                        as Box<dyn for<'a> Fn(&'a mut State)>,
-                )
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let model: Vec<Item> = if s.picker == Some(Picker::Model) {
-        let language = settings.language.as_deref().and_then(Language::parse);
-        catalog()
-            .iter()
-            .filter(|item| {
-                language.is_none_or(|lang| santhra_models::matches_language(item.language, lang))
-            })
-            .map(|item| {
-                let id = item.id;
-                let label = format!("{} — {}", item.label, item.language.label());
-                let selected = settings.model_id.as_deref() == Some(id);
-                (
-                    label,
-                    selected,
-                    Box::new(move |s: &mut State| select_model(s, id))
-                        as Box<dyn for<'a> Fn(&'a mut State)>,
-                )
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
     let kit = Kit::neutral(true);
     let mut overlays = Vec::new();
-    let body = {
-        let mut ctx = MenuCtx {
-            kit: &kit,
-            overlays: &mut overlays,
-        };
-        let Items {
-            audio,
-            font,
-            language,
-            model,
-        } = Items {
-            audio,
-            font,
-            language,
-            model,
-        };
-        let tabs = [
-            SettingsTab::Recognition,
-            SettingsTab::Appearance,
-            SettingsTab::About,
-        ];
-        let mut sidebar = col().w(150.0).gap(4.0);
-        for tab in tabs {
-            sidebar = sidebar.child(tab_button(tab, s.tab == tab));
-        }
-        let content = match s.tab {
-            SettingsTab::Recognition => {
-                recognition_tab(s, &settings, &mut ctx, audio, language, model)
-            }
-            SettingsTab::Appearance => appearance_tab(s, &settings, &mut ctx, font),
-            SettingsTab::About => about_tab(),
-        };
-        col()
-            .key("settings")
-            .w_full()
-            .h_full()
-            .fill(t.bg)
-            .child(
-                row()
-                    .h(48.0)
-                    .w_full()
-                    .px(16.0)
-                    .gap(12.0)
-                    .center_y()
-                    .justify_between()
-                    .child(text("Settings").font(type_::TITLE).color(t.text))
-                    .child(button("Done", done)),
-            )
-            .child(
-                row()
-                    .grow(1.0)
-                    .w_full()
-                    .px(16.0)
-                    .pb(16.0)
-                    .gap(16.0)
-                    .child(sidebar)
-                    .child(
-                        col()
-                            .grow(1.0)
-                            .gap(16.0)
-                            .scroll(ScrollSpec {
-                                stick_bottom: false,
-                            })
-                            .child(content),
-                    ),
-            )
+    let content = match s.tab {
+        SettingsTab::Recognition => recognition_tab(s, &settings, &kit, &sinks, &mut overlays),
+        SettingsTab::Appearance => appearance_tab(s, &settings, &kit, &mut overlays),
+        SettingsTab::About => about_tab(&kit),
     };
+    let body = col()
+        .key("settings")
+        .w_full()
+        .h_full()
+        .fill(t.bg)
+        .child(
+            Toolbar::new()
+                .title("Settings")
+                .trailing(
+                    Button::new("Done")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(done)
+                        .build(&kit),
+                )
+                .build(&kit),
+        )
+        .child(
+            row()
+                .grow(1.0)
+                .w_full()
+                .px(16.0)
+                .pb(16.0)
+                .gap(16.0)
+                .child(nav(s, &kit))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .gap(16.0)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .child(content),
+                ),
+        );
     root(body, overlays)
 }
 
-fn tab_button(tab: SettingsTab, active: bool) -> El {
-    let t = tok::theme(true);
-    let label = match tab {
+fn nav(s: &State, kit: &Kit) -> El {
+    col().w(150.0).gap(2.0).children(
+        [
+            SettingsTab::Recognition,
+            SettingsTab::Appearance,
+            SettingsTab::About,
+        ]
+        .into_iter()
+        .map(|tab| {
+            SidebarRow::new(tab_label(tab))
+                .selected(s.tab == tab)
+                .on_select(move |s: &mut State, _: &mut Tx| s.tab = tab)
+                .build(kit)
+        }),
+    )
+}
+
+fn tab_label(tab: SettingsTab) -> &'static str {
+    match tab {
         SettingsTab::Recognition => "Recognition",
         SettingsTab::Appearance => "Appearance",
         SettingsTab::About => "About",
-    };
-    el().h(36.0)
-        .px(12.0)
-        .center_y()
-        .radius(8.0)
-        .fill(if active {
-            tok::accent(0, true)
-        } else {
-            t.control_off
-        })
-        .on_press(move |s: &mut State| s.tab = tab)
-        .child(
-            text(label)
-                .font(type_::LABEL)
-                .color(if active { t.knob } else { t.text }),
-        )
-}
-
-/// A dropdown built with Rune's Menu primitive: the menu lives in the overlay layer, anchored to
-/// its trigger, with a scrim that dismisses it on outside clicks.
-fn picker_row(
-    ctx: &mut MenuCtx<'_>,
-    key: &'static str,
-    which: Picker,
-    label: &str,
-    value: &str,
-    open: bool,
-    items: Vec<Item>,
-) -> El {
-    let t = tok::theme(true);
-    let trigger = row()
-        .h(32.0)
-        .gap(12.0)
-        .center_y()
-        .on_press(move |s: &mut State| {
-            s.picker = if s.picker == Some(which) {
-                None
-            } else {
-                Some(which)
-            };
-        })
-        .child(
-            text(label)
-                .w(112.0)
-                .font(type_::LABEL)
-                .color(t.text_secondary),
-        )
-        .child(text(value.to_owned()).font(type_::BODY).color(t.text))
-        .child(
-            text(if open { "▴" } else { "▾" })
-                .font(type_::BODY)
-                .color(t.text_secondary),
-        );
-
-    let mut menu = Menu::new(key)
-        .trigger(trigger)
-        .open(open)
-        .on_close(move |s: &mut State| {
-            if s.picker == Some(which) {
-                s.picker = None;
-            }
-        });
-    for (label, checked, select) in items {
-        menu = menu.item(MenuItem::new(label).checked(checked).on_select(select));
     }
-    menu.build(ctx.kit, ctx.overlays)
 }
 
 fn recognition_tab(
     s: &State,
     settings: &Settings,
-    ctx: &mut MenuCtx<'_>,
-    audio: Vec<Item>,
-    language: Vec<Item>,
-    model: Vec<Item>,
+    kit: &Kit,
+    sinks: &[audio_linux::Sink],
+    overlays: &mut Vec<El>,
 ) -> El {
     let t = tok::theme(true);
     let active = settings.model_id.as_deref().and_then(entry);
@@ -293,7 +110,7 @@ fn recognition_tab(
         .map(|dir| santhra_models::files_present(target, &dir))
         .unwrap_or(false);
     let download = { Shared::get().download.lock().unwrap().clone() };
-    let (badge, status, progress_width) = match &download {
+    let (badge, variant, status, progress) = match &download {
         DownloadStatus::Running {
             id, done, total, ..
         } if id == target.id => {
@@ -304,100 +121,170 @@ fn recognition_tab(
             };
             (
                 "DOWNLOADING",
+                BadgeVariant::Subtle,
                 format!("{}% — keep this window open", (ratio * 100.0) as u32),
-                (300.0 * ratio).max(2.0),
+                Some(ratio),
             )
         }
-        DownloadStatus::Done(id) if id == target.id => ("READY", "Download verified".into(), 0.0),
-        DownloadStatus::Failed(err) => ("ERROR", err.clone(), 0.0),
-        _ if installed => ("READY", "Installed and verified".into(), 0.0),
-        _ => ("NOT INSTALLED", "Download to use this model".into(), 0.0),
+        DownloadStatus::Done(id) if id == target.id => (
+            "READY",
+            BadgeVariant::Accent,
+            "Download verified".into(),
+            None,
+        ),
+        DownloadStatus::Failed(err) => ("ERROR", BadgeVariant::Neutral, err.clone(), None),
+        _ if installed => (
+            "READY",
+            BadgeVariant::Accent,
+            "Installed and verified".into(),
+            None,
+        ),
+        _ => (
+            "NOT INSTALLED",
+            BadgeVariant::Neutral,
+            "Download to use this model".into(),
+            None,
+        ),
     };
     let active_label = active.map(|item| item.label).unwrap_or("Legacy folder");
     let needs_activate = pending.is_some_and(|item| Some(item.id) != active.map(|a| a.id));
+
     let mut actions = row().gap(8.0);
     if !installed {
-        actions = actions.child(button("Download", download_selected));
+        actions = actions.child(
+            Button::new("Download")
+                .on_press(download_selected)
+                .build(kit),
+        );
     }
     if matches!(download, DownloadStatus::Running { .. }) {
-        actions = actions.child(button("Cancel", cancel_download_clicked));
+        actions = actions.child(
+            Button::new("Cancel")
+                .on_press(cancel_download_clicked)
+                .build(kit),
+        );
     }
     if needs_activate {
-        actions = actions.child(button("Activate", activate_selected));
+        actions = actions.child(
+            Button::new("Activate")
+                .variant(ButtonVariant::Contrast)
+                .on_press(activate_selected)
+                .build(kit),
+        );
     }
+
+    let mut summary = Card::new()
+        .title("Active model", None)
+        .description(format!(
+            "{} • {} MB • buffer {} ms",
+            target.language.label(),
+            target.total_bytes() / 1_000_000,
+            settings.buffer_ms
+        ))
+        .action(actions)
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(Badge::new(badge).variant(variant).build(kit))
+                .child(text(active_label).font(type_::BODY).color(t.text)),
+        )
+        .child(text(status).font(type_::LABEL).color(t.text_secondary));
+    if let Some(ratio) = progress {
+        summary = summary.child(
+            Progress::new(Some(ratio))
+                .label("Downloading")
+                .show_value()
+                .build(kit),
+        );
+    }
+
+    let language_value = settings
+        .language
+        .clone()
+        .unwrap_or_else(|| Language::English.as_str().to_owned());
+    let language_options: Vec<ComboboxOption> = Language::ALL
+        .into_iter()
+        .map(|lang| ComboboxOption::new(lang.as_str(), lang.label()))
+        .collect();
+    let language_picker = Combobox::new(
+        "language",
+        &s.language_combo,
+        &language_options,
+        |s: &mut State| &mut s.language_combo,
+    )
+    .label("Language")
+    .current(Some(language_value.as_str()))
+    .on_choose(|s, id, _| {
+        if let Some(lang) = Language::ALL.into_iter().find(|lang| lang.as_str() == id) {
+            set_language(s, lang.as_str());
+        }
+    })
+    .build(kit, overlays);
+
+    let language = settings.language.as_deref().and_then(Language::parse);
+    let mut model_options: Vec<ComboboxOption> = catalog()
+        .iter()
+        .filter(|item| {
+            language.is_none_or(|lang| santhra_models::matches_language(item.language, lang))
+        })
+        .map(|item| ComboboxOption::new(item.id, item.label))
+        .collect();
+    if !model_options.iter().any(|option| option.id == target.id) {
+        model_options.push(ComboboxOption::new(target.id, target.label));
+    }
+    let model_picker = Combobox::new("model", &s.model_combo, &model_options, |s: &mut State| {
+        &mut s.model_combo
+    })
+    .label("Model")
+    .current(Some(target.id))
+    .on_choose(|s, id, _| {
+        if let Some(item) = entry(id) {
+            select_model(s, item.id);
+        }
+    })
+    .build(kit, overlays);
+
+    let mut source_options = vec![ComboboxOption::new("default", "Default sink")];
+    for sink in sinks {
+        source_options.push(ComboboxOption::new(
+            sink.name.clone(),
+            sink.description.clone(),
+        ));
+    }
+    if let Some(current) = settings.target.as_deref()
+        && !sinks.iter().any(|sink| sink.name == current)
+    {
+        source_options.push(ComboboxOption::new(current.to_owned(), current.to_owned()));
+    }
+    let source_picker = Combobox::new(
+        "source",
+        &s.source_combo,
+        &source_options,
+        |s: &mut State| &mut s.source_combo,
+    )
+    .label("Audio source")
+    .current(Some(settings.target.as_deref().unwrap_or("default")))
+    .on_choose(|s, id, _| {
+        set_source(
+            s,
+            if id == "default" {
+                None
+            } else {
+                Some(id.to_owned())
+            },
+        );
+    })
+    .build(kit, overlays);
 
     col()
         .gap(16.0)
+        .child(summary.build(kit))
         .child(
-            col()
-                .gap(8.0)
-                .child(
-                    row()
-                        .gap(10.0)
-                        .center_y()
-                        .child(
-                            el().h(22.0)
-                                .px(8.0)
-                                .radius(6.0)
-                                .center_y()
-                                .fill(if badge == "READY" {
-                                    tok::accent(0, true)
-                                } else {
-                                    t.control_off
-                                })
-                                .child(text(badge).font(type_::SECTION).color(t.knob)),
-                        )
-                        .child(
-                            text("Active model")
-                                .font(type_::LABEL)
-                                .color(t.text_secondary),
-                        )
-                        .child(text(active_label).font(type_::BODY).color(t.text)),
-                )
-                .child(
-                    text(format!(
-                        "{} • {} MB • buffer {} ms",
-                        target.language.label(),
-                        target.total_bytes() / 1_000_000,
-                        settings.buffer_ms
-                    ))
-                    .font(type_::LABEL)
-                    .color(t.text_secondary),
-                )
-                .child(text(status).font(type_::LABEL).color(t.text_secondary))
-                .child(actions)
-                .child(if progress_width > 0.0 {
-                    progress_bar(progress_width, &t)
-                } else {
-                    el()
-                }),
-        )
-        .child(
-            col()
-                .gap(4.0)
-                .child(
-                    text("Choose model")
-                        .font(type_::SECTION)
-                        .color(t.text_secondary),
-                )
-                .child(picker_row(
-                    ctx,
-                    "language-picker",
-                    Picker::Language,
-                    "Language",
-                    settings.language.as_deref().unwrap_or("english"),
-                    s.picker == Some(Picker::Language),
-                    language,
-                ))
-                .child(picker_row(
-                    ctx,
-                    "model-picker",
-                    Picker::Model,
-                    "Model",
-                    target.label,
-                    s.picker == Some(Picker::Model),
-                    model,
-                ))
+            Card::new()
+                .title("Choose model", None)
+                .child(labelled(kit, "Language", language_picker))
+                .child(labelled(kit, "Model", model_picker))
                 .child(
                     text(if needs_activate {
                         "Press Activate to use the selected model."
@@ -406,145 +293,200 @@ fn recognition_tab(
                     })
                     .font(type_::LABEL)
                     .color(t.text_secondary),
-                ),
+                )
+                .build(kit),
         )
-        .child(section(
-            "Audio",
-            vec![
-                picker_row(
-                    ctx,
-                    "source-picker",
-                    Picker::Source,
-                    "Audio source",
-                    settings.target.as_deref().unwrap_or("Default sink"),
-                    s.picker == Some(Picker::Source),
-                    audio,
-                ),
-                button("Refresh model check", refresh_model),
-                slider(
-                    "threads",
-                    "Threads",
-                    settings.threads as f32,
-                    1.0,
-                    8.0,
-                    set_threads,
-                ),
-                toggle_row("Start listening on launch", settings.start_on_launch, {
-                    let value = settings.start_on_launch;
-                    move |s| set_start_on_launch(s, !value)
-                }),
-            ],
-        ))
-}
-
-fn progress_bar(width: f32, t: &tok::Theme) -> El {
-    row()
-        .gap(10.0)
-        .center_y()
         .child(
-            el().size(300.0, 8.0)
-                .radius(4.0)
-                .fill(t.control_off)
-                .child(el().size(width, 8.0).radius(4.0).fill(tok::accent(0, true))),
+            Card::new()
+                .title("Audio", None)
+                .child(labelled(kit, "Audio source", source_picker))
+                .child(
+                    row().child(
+                        Button::new("Refresh model check")
+                            .on_press(refresh_model)
+                            .build(kit),
+                    ),
+                )
+                .child(
+                    Slider::new("threads", settings.threads as f32)
+                        .range(1.0..=8.0)
+                        .step(1.0)
+                        .label("Threads")
+                        .on_change(|s: &mut State, value, _| set_threads(s, value))
+                        .build(kit),
+                )
+                .child(
+                    Switch::new(settings.start_on_launch)
+                        .label("Start listening on launch")
+                        .on_toggle({
+                            let value = settings.start_on_launch;
+                            move |s: &mut State| set_start_on_launch(s, !value)
+                        })
+                        .build(kit),
+                )
+                .build(kit),
         )
-        .child(el())
 }
 
-fn appearance_tab(s: &State, settings: &Settings, ctx: &mut MenuCtx<'_>, font: Vec<Item>) -> El {
+fn appearance_tab(s: &State, settings: &Settings, kit: &Kit, overlays: &mut Vec<El>) -> El {
+    let families = fonts::families();
+    let current_font = settings.font_family.as_deref().unwrap_or("default");
+    let mut font_options: Vec<ComboboxOption> =
+        vec![ComboboxOption::new("default", "System default")];
+    for name in families {
+        font_options.push(ComboboxOption::new(name.clone(), name.clone()));
+    }
+    if current_font != "default" && !families.iter().any(|name| name == current_font) {
+        font_options.insert(1, ComboboxOption::new(current_font, current_font));
+    }
+    let font_picker = Combobox::new("font", &s.font_combo, &font_options, |s: &mut State| {
+        &mut s.font_combo
+    })
+    .label("Font")
+    .current(Some(current_font))
+    .search_placeholder("Search fonts")
+    .on_choose(|s, id, _| {
+        set_font(
+            s,
+            if id == "default" {
+                None
+            } else {
+                Some(id.to_owned())
+            },
+        );
+    })
+    .build(kit, overlays);
+
+    let mut background_options: Vec<ComboboxOption> = settings::BACKGROUND_PRESETS
+        .iter()
+        .map(|(name, hex)| ComboboxOption::new(*hex, *name))
+        .collect();
+    let current_background = settings.background_color.clone();
+    if !background_options
+        .iter()
+        .any(|option| option.id == current_background)
+    {
+        background_options.insert(0, ComboboxOption::new(current_background.clone(), "Custom"));
+    }
+    let background_picker = Combobox::new(
+        "background",
+        &s.background_combo,
+        &background_options,
+        |s: &mut State| &mut s.background_combo,
+    )
+    .label("Background")
+    .current(Some(current_background.as_str()))
+    .on_choose(|s, id, _| {
+        if let Some((_, value)) = settings::BACKGROUND_PRESETS
+            .iter()
+            .find(|(_, value)| *value == id)
+        {
+            set_background(s, value);
+        }
+    })
+    .build(kit, overlays);
+
+    let text_colour = Field::new()
+        .label("Text colour")
+        .control(
+            TextInput::new(&s.text_hex)
+                .label("Text colour")
+                .on_edit(|s: &mut State| &mut s.text_hex)
+                .build(kit),
+        )
+        .build(kit);
+
     col()
         .gap(16.0)
-        .child(section(
-            "Caption text",
-            vec![
-                labelled(
-                    "Font search",
-                    text_field("font-search", &s.font_query, |s| &mut s.font_query),
-                ),
-                picker_row(
-                    ctx,
-                    "font-picker",
-                    Picker::Font,
-                    "Font",
-                    settings.font_family.as_deref().unwrap_or("System default"),
-                    s.picker == Some(Picker::Font),
-                    font,
-                ),
-                slider(
-                    "font-size",
-                    "Font size",
-                    settings.font_size,
-                    12.0,
-                    72.0,
-                    set_font_size,
-                ),
-                labelled(
-                    "Text colour",
-                    text_field("text-colour", &s.text_hex, |s| &mut s.text_hex),
-                ),
-                background_row(settings),
-                slider(
-                    "lines",
-                    "Caption lines",
-                    settings.max_lines as f32,
-                    1.0,
-                    5.0,
-                    set_lines,
-                ),
-                toggle_row("Show partial results", settings.show_partial, {
-                    let value = settings.show_partial;
-                    move |s| set_show_partial(s, !value)
-                }),
-            ],
-        ))
-        .child(section(
-            "Overlay",
-            vec![
-                toggle_row(
-                    "Show floating overlay",
-                    settings.overlay_enabled,
-                    toggle_overlay,
-                ),
-                toggle_row(
-                    "Always on top (X11 only)",
-                    settings.overlay_always_on_top,
-                    {
-                        let value = settings.overlay_always_on_top;
-                        move |s| set_always_on_top(s, !value)
-                    },
-                ),
-                toggle_row("Click-through", settings.overlay_click_through, {
-                    let value = settings.overlay_click_through;
-                    move |s| set_click_through(s, !value)
-                }),
-                slider(
-                    "opacity",
-                    "Opacity",
-                    settings.overlay_opacity,
-                    0.1,
-                    1.0,
-                    set_opacity,
-                ),
-                slider(
-                    "width",
-                    "Width (on open)",
-                    settings.overlay_width,
-                    240.0,
-                    1600.0,
-                    set_width,
-                ),
-                slider(
-                    "height",
-                    "Height (on open)",
-                    settings.overlay_height,
-                    80.0,
-                    600.0,
-                    set_height,
-                ),
-            ],
-        ))
+        .child(
+            Card::new()
+                .title("Caption text", None)
+                .child(labelled(kit, "Font", font_picker))
+                .child(
+                    Slider::new("font-size", settings.font_size)
+                        .range(12.0..=72.0)
+                        .step(1.0)
+                        .label("Font size")
+                        .on_change(|s: &mut State, value, _| set_font_size(s, value))
+                        .build(kit),
+                )
+                .child(text_colour)
+                .child(labelled(kit, "Background", background_picker))
+                .child(
+                    Slider::new("lines", settings.max_lines as f32)
+                        .range(1.0..=5.0)
+                        .step(1.0)
+                        .label("Caption lines")
+                        .on_change(|s: &mut State, value, _| set_lines(s, value))
+                        .build(kit),
+                )
+                .child(
+                    Switch::new(settings.show_partial)
+                        .label("Show partial results")
+                        .on_toggle({
+                            let value = settings.show_partial;
+                            move |s: &mut State| set_show_partial(s, !value)
+                        })
+                        .build(kit),
+                )
+                .build(kit),
+        )
+        .child(
+            Card::new()
+                .title("Overlay", None)
+                .child(
+                    Switch::new(settings.overlay_enabled)
+                        .label("Show floating overlay")
+                        .on_toggle(toggle_overlay)
+                        .build(kit),
+                )
+                .child(
+                    Switch::new(settings.overlay_always_on_top)
+                        .label("Always on top (X11 only)")
+                        .on_toggle({
+                            let value = settings.overlay_always_on_top;
+                            move |s: &mut State| set_always_on_top(s, !value)
+                        })
+                        .build(kit),
+                )
+                .child(
+                    Switch::new(settings.overlay_click_through)
+                        .label("Click-through")
+                        .on_toggle({
+                            let value = settings.overlay_click_through;
+                            move |s: &mut State| set_click_through(s, !value)
+                        })
+                        .build(kit),
+                )
+                .child(
+                    Slider::new("opacity", settings.overlay_opacity)
+                        .range(0.1..=1.0)
+                        .step(0.05)
+                        .label("Opacity")
+                        .on_change(|s: &mut State, value, _| set_opacity(s, value))
+                        .build(kit),
+                )
+                .child(
+                    Slider::new("width", settings.overlay_width)
+                        .range(240.0..=1600.0)
+                        .step(10.0)
+                        .label("Width (on open)")
+                        .on_change(|s: &mut State, value, _| set_width(s, value))
+                        .build(kit),
+                )
+                .child(
+                    Slider::new("height", settings.overlay_height)
+                        .range(80.0..=600.0)
+                        .step(10.0)
+                        .label("Height (on open)")
+                        .on_change(|s: &mut State, value, _| set_height(s, value))
+                        .build(kit),
+                )
+                .build(kit),
+        )
 }
 
-fn about_tab() -> El {
+fn about_tab(kit: &Kit) -> El {
     let t = tok::theme(true);
     let mut licences = col().gap(4.0);
     for item in catalog() {
@@ -557,19 +499,17 @@ fn about_tab() -> El {
             .color(t.text_secondary),
         );
     }
-    section(
-        "About",
-        vec![
-            col()
-                .gap(6.0)
+    col()
+        .gap(16.0)
+        .child(
+            Card::new()
+                .title("About", None)
                 .child(text("Santhra").font(type_::TITLE).color(t.text))
                 .child(
                     text("Live system-audio captions with a floating overlay.")
                         .font(type_::BODY)
                         .color(t.text_secondary),
-                ),
-            col()
-                .gap(6.0)
+                )
                 .child(
                     text(format!("Config: {}", Settings::path().display()))
                         .font(type_::LABEL)
@@ -590,17 +530,28 @@ fn about_tab() -> El {
                     }
                     .font(type_::LABEL)
                     .color(t.text_secondary),
-                ),
-            col()
-                .gap(6.0)
-                .child(
-                    text("Model licences")
-                        .font(type_::SECTION)
-                        .color(t.text_secondary),
                 )
-                .child(licences),
-        ],
-    )
+                .build(kit),
+        )
+        .child(
+            Card::new()
+                .title("Model licences", None)
+                .child(licences)
+                .build(kit),
+        )
+}
+
+fn labelled(kit: &Kit, label: &str, control: El) -> El {
+    col()
+        .gap(8.0)
+        .w_full()
+        .items_start()
+        .child(
+            text(label)
+                .font(kit.ty.ui_medium.lh(16.0))
+                .color(kit.c.text_base),
+        )
+        .child(control)
 }
 
 fn set_language(s: &mut State, id: &'static str) {
@@ -620,14 +571,12 @@ fn set_language(s: &mut State, id: &'static str) {
             }
         }
     }
-    s.picker = None;
     s.pending_model = None;
     shared.publish();
 }
 
 fn select_model(s: &mut State, id: &'static str) {
     s.pending_model = Some(id);
-    s.picker = None;
 }
 
 fn target_model(s: &State) -> &'static santhra_models::ModelEntry {
@@ -653,35 +602,6 @@ fn activate_selected(s: &mut State) {
     s.pending_model = None;
 }
 
-fn labelled(label: &str, control: El) -> El {
-    let t = tok::theme(true);
-    col()
-        .gap(6.0)
-        .child(text(label).font(type_::LABEL).color(t.text_secondary))
-        .child(control)
-}
-
-fn background_row(settings: &Settings) -> El {
-    let t = tok::theme(true);
-    let current = settings.background_rgba();
-    let mut row = row().gap(6.0).center_y();
-    for (name, value) in settings::BACKGROUND_PRESETS {
-        let swatch = settings::parse_rgba(value);
-        let border = if swatch == current { 2.0 } else { 1.0 };
-        let value: &'static str = value;
-        row = row.child(
-            el().h(22.0)
-                .w(30.0)
-                .radius(6.0)
-                .fill(rgba(swatch))
-                .border(border, if swatch == current { t.text } else { t.edge })
-                .on_press(move |s: &mut State| set_background(s, value)),
-        );
-        let _ = name;
-    }
-    labelled("Background", row)
-}
-
 fn valid_hex(text: &str) -> bool {
     let hex = text.trim().trim_start_matches('#');
     matches!(hex.len(), 6 | 8) && u32::from_str_radix(hex, 16).is_ok()
@@ -695,8 +615,12 @@ fn done(s: &mut State) {
             settings.text_color = settings::to_hex(settings::parse_rgba(&s.text_hex.text));
         }
     }
+    s.font_combo.close();
+    s.source_combo.close();
+    s.language_combo.close();
+    s.model_combo.close();
+    s.background_combo.close();
     shared.apply_settings();
-    s.picker = None;
     s.screen = Screen::Main;
 }
 
@@ -755,7 +679,7 @@ fn set_font_size(s: &mut State, value: f32) {
     shared.publish();
 }
 
-fn set_font(s: &mut State, name: Option<String>) {
+fn set_font(_s: &mut State, name: Option<String>) {
     let shared = Shared::get();
     let size = {
         let mut settings = shared.settings.lock().unwrap();
@@ -766,14 +690,12 @@ fn set_font(s: &mut State, name: Option<String>) {
         family: name.as_deref().map(leaked_family),
         size,
     };
-    s.picker = None;
     shared.publish();
 }
 
-fn set_source(s: &mut State, name: Option<String>) {
+fn set_source(_s: &mut State, name: Option<String>) {
     let shared = Shared::get();
     shared.settings.lock().unwrap().target = name;
-    s.picker = None;
     shared.publish();
 }
 

@@ -3,7 +3,6 @@ mod fonts;
 mod overlay;
 mod settings;
 mod settings_view;
-mod widgets;
 
 use rune::{AppSpec, Tx, WindowOptions, WindowSpec};
 

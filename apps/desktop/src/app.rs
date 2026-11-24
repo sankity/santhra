@@ -8,10 +8,10 @@ use rune::tok::{self, type_};
 use rune::{
     Color, Cx, El, Family, ScrollSpec, TextEdit, TextStyle, Waker, WindowHandle, col, el, row, text,
 };
+use rune_kit::{Button, ComboboxEvent, ComboboxState, Kit, Toolbar};
 use speech_sherpa::ModelKind;
 
 use crate::settings::Settings;
-use crate::widgets::button;
 
 pub struct FontChoice {
     pub family: Option<&'static str>,
@@ -138,25 +138,20 @@ pub enum Screen {
     Settings,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Picker {
-    Font,
-    Source,
-    Language,
-    Model,
-}
-
 pub struct State {
     pub id: &'static str,
     pub screen: Screen,
     pub tab: SettingsTab,
-    pub picker: Option<Picker>,
     pub pending_model: Option<&'static str>,
     pub seen: usize,
     pub session: Option<Session>,
     pub status: String,
     pub text_hex: TextEdit,
-    pub font_query: TextEdit,
+    pub font_combo: ComboboxState,
+    pub source_combo: ComboboxState,
+    pub language_combo: ComboboxState,
+    pub model_combo: ComboboxState,
+    pub background_combo: ComboboxState,
 }
 
 impl State {
@@ -166,13 +161,16 @@ impl State {
             id,
             screen: Screen::Main,
             tab: SettingsTab::Recognition,
-            picker: None,
             pending_model: None,
             seen: 0,
             session: None,
             status: "Idle".into(),
             text_hex: TextEdit::new(settings.text_color.clone()),
-            font_query: TextEdit::new(String::new()),
+            font_combo: ComboboxState::default(),
+            source_combo: ComboboxState::default(),
+            language_combo: ComboboxState::default(),
+            model_combo: ComboboxState::default(),
+            background_combo: ComboboxState::default(),
         }
     }
 }
@@ -362,6 +360,7 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
         }
     };
     let bg = t.bg;
+    let kit = Kit::neutral(true);
 
     let mut captions = col().w_full().gap(6.0);
     if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
@@ -379,38 +378,39 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
         }
     }
 
+    let status = row()
+        .key("status")
+        .gap(8.0)
+        .center_y()
+        .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
+        .child(text(&s.status).font(type_::LABEL).color(t.text))
+        .child(if model_ok {
+            el()
+        } else {
+            text("model files not found").font(type_::LABEL).color(dot)
+        });
+    let toolbar = Toolbar::new()
+        .leading(Button::new("Start").on_press(start_session).build(&kit))
+        .leading(Button::new("Stop").on_press(stop_session).build(&kit))
+        .leading(
+            Button::new(if settings.overlay_enabled {
+                "Overlay: on"
+            } else {
+                "Overlay: off"
+            })
+            .on_press(toggle_overlay)
+            .build(&kit),
+        )
+        .center(status)
+        .trailing(Button::new("Settings").on_press(open_settings).build(&kit))
+        .build(&kit);
+
     col()
         .key("main")
         .w_full()
         .h_full()
         .fill(bg)
-        .child(
-            row()
-                .key("toolbar")
-                .h(44.0)
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .px(12.0)
-                .child(button("Start", start_session))
-                .child(button("Stop", stop_session))
-                .child(button(
-                    if settings.overlay_enabled {
-                        "Overlay: on"
-                    } else {
-                        "Overlay: off"
-                    },
-                    toggle_overlay,
-                ))
-                .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
-                .child(text(&s.status).font(type_::LABEL).color(t.text))
-                .child(if model_ok {
-                    el()
-                } else {
-                    text("model files not found").font(type_::LABEL).color(dot)
-                })
-                .child(button("Settings", open_settings)),
-        )
+        .child(toolbar)
         .child(
             col()
                 .key("captions")
@@ -566,13 +566,19 @@ pub fn scene_settings(s: &mut State) {
 pub fn scene_font_picker(s: &mut State) {
     s.screen = Screen::Settings;
     s.tab = SettingsTab::Appearance;
-    s.picker = Some(Picker::Font);
+    let current = Shared::get().settings().font_family;
+    s.font_combo.step(ComboboxEvent::Toggle {
+        current: current.as_deref(),
+    });
 }
 
 /// Headless tooling scene: open the Audio source dropdown inside the Settings layer.
 pub fn scene_source_picker(s: &mut State) {
     s.screen = Screen::Settings;
-    s.picker = Some(Picker::Source);
+    let current = Shared::get().settings().target;
+    s.source_combo.step(ComboboxEvent::Toggle {
+        current: current.as_deref(),
+    });
 }
 
 /// Headless tooling scenes: one per Settings tab.
@@ -601,11 +607,20 @@ pub fn scene_settings_model(s: &mut State) {
 pub fn scene_language_picker(s: &mut State) {
     s.screen = Screen::Settings;
     s.tab = SettingsTab::Recognition;
-    s.picker = Some(Picker::Language);
+    let current = Shared::get().settings().language;
+    s.language_combo.step(ComboboxEvent::Toggle {
+        current: current.as_deref(),
+    });
 }
 
 pub fn scene_model_picker(s: &mut State) {
     s.screen = Screen::Settings;
     s.tab = SettingsTab::Recognition;
-    s.picker = Some(Picker::Model);
+    let current = s
+        .pending_model
+        .map(str::to_owned)
+        .or_else(|| Shared::get().settings().model_id);
+    s.model_combo.step(ComboboxEvent::Toggle {
+        current: current.as_deref(),
+    });
 }

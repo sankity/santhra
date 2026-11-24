@@ -20,11 +20,11 @@ version = "0.1.0"
 # Cargo does not inherit a dependency's [patch] table. Keep wgpu/naga/wgpu-hal at
 # 30.0.1 in Cargo.lock; 30.0.2 makes these vendored patches unused.
 [patch.crates-io]
-winit = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-parley_engine = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-naga = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
-accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "ec57edccba7b924fa52db11243fe219d3169ad45" }
