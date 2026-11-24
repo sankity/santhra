@@ -21,6 +21,7 @@ pub struct Style {
     pub always_on_top: bool,
     pub click_through: bool,
     pub font_size: f32,
+    pub font_family: Option<String>,
     pub text_color: [u8; 4],
     pub background_color: [u8; 4],
     pub show_partial: bool,
@@ -35,6 +36,7 @@ impl Style {
             always_on_top: settings.overlay_always_on_top,
             click_through: settings.overlay_click_through,
             font_size: settings.font_size,
+            font_family: settings.font_family.clone(),
             text_color: settings.text_rgba(),
             background_color: settings.background_rgba(),
             show_partial: settings.show_partial,
@@ -120,10 +122,18 @@ pub fn show(ctx: &egui::Context, shared: &Arc<Mutex<Shared>>, enabled: bool) {
                                 style.font_size,
                                 fg_color(&style),
                                 true,
+                                style.font_family.as_deref(),
                             );
                         }
                         for line in caption.finals.iter().rev() {
-                            caption_row(ui, &line.text, style.font_size, fg_color(&style), false);
+                            caption_row(
+                                ui,
+                                &line.text,
+                                style.font_size,
+                                fg_color(&style),
+                                false,
+                                style.font_family.as_deref(),
+                            );
                         }
                     });
                 }

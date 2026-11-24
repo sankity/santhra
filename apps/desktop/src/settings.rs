@@ -26,6 +26,8 @@ pub struct Settings {
     pub threads: i32,
     pub max_lines: usize,
     pub show_partial: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
     pub font_size: f32,
     pub text_color: String,
     pub background_color: String,
@@ -48,6 +50,7 @@ impl Default for Settings {
             threads: 2,
             max_lines: 2,
             show_partial: true,
+            font_family: None,
             font_size: 32.0,
             text_color: "#FFFFFFFF".into(),
             background_color: "#101014E6".into(),

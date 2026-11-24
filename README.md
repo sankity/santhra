@@ -55,7 +55,8 @@ cargo run -p santhra-desktop
 ```
 
 Settings live in `~/.config/santhra/config.toml` and are written by the app. Delete that file
-to reset.
+to reset. The caption font can be picked from the installed system fonts (fontconfig); fonts
+dropped into `~/.local/share/fonts` show up after `fc-cache -f`.
 
 ### Floating overlay
 

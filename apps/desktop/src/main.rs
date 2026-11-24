@@ -1,4 +1,5 @@
 mod app;
+mod fonts;
 mod overlay;
 mod settings;
 

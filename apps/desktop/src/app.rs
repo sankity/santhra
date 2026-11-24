@@ -7,6 +7,7 @@ use caption_core::CaptionSnapshot;
 use eframe::egui::containers::scroll_area::ScrollBarVisibility;
 use eframe::egui::{self, Align, Color32, Layout, RichText};
 
+use crate::fonts;
 use crate::overlay;
 use crate::settings::{self, Settings};
 
@@ -17,13 +18,15 @@ pub struct Santhra {
     session: Option<Session>,
     snapshot: CaptionSnapshot,
     overlay: Arc<Mutex<overlay::Shared>>,
+    font_families: Option<Vec<String>>,
     status: String,
     model_ok: bool,
 }
 
 impl Santhra {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = Settings::load();
+        fonts::apply(&cc.egui_ctx, settings.font_family.as_deref());
         let model_ok = speech_sherpa::ModelFiles::load(Path::new(&settings.model_dir)).is_ok();
         let start = settings.start_on_launch;
         let mut app = Self {
@@ -33,6 +36,7 @@ impl Santhra {
             session: None,
             snapshot: CaptionSnapshot::default(),
             overlay: Arc::new(Mutex::new(overlay::Shared::default())),
+            font_families: None,
             status: "Idle".into(),
             model_ok,
         };
@@ -192,6 +196,31 @@ impl Santhra {
 
                 ui.label("Caption lines");
                 ui.add(egui::Slider::new(&mut self.settings.max_lines, 1..=5));
+                ui.end_row();
+
+                ui.label("Font");
+                let families = self
+                    .font_families
+                    .get_or_insert_with(fonts::installed)
+                    .clone();
+                let current = self.settings.font_family.clone().unwrap_or_default();
+                let mut selected = current.clone();
+                egui::ComboBox::from_id_salt("font-family")
+                    .selected_text(if current.is_empty() {
+                        "System default"
+                    } else {
+                        current.as_str()
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut selected, String::new(), "System default");
+                        for name in &families {
+                            ui.selectable_value(&mut selected, name.clone(), name);
+                        }
+                    });
+                if selected != current {
+                    self.settings.font_family = (!selected.is_empty()).then_some(selected);
+                    fonts::apply(ui.ctx(), self.settings.font_family.as_deref());
+                }
                 ui.end_row();
 
                 ui.label("Font size");
@@ -371,6 +400,7 @@ pub(crate) fn caption_labels(ui: &mut egui::Ui, settings: &Settings, snapshot: &
             settings.font_size,
             color(settings.text_rgba()),
             false,
+            settings.font_family.as_deref(),
         );
     }
     if settings.show_partial && !snapshot.partial.is_empty() {
@@ -380,12 +410,23 @@ pub(crate) fn caption_labels(ui: &mut egui::Ui, settings: &Settings, snapshot: &
             settings.font_size,
             color(settings.text_rgba()),
             true,
+            settings.font_family.as_deref(),
         );
     }
 }
 
-pub(crate) fn caption_row(ui: &mut egui::Ui, text: &str, size: f32, color: Color32, italics: bool) {
-    let mut label = RichText::new(text).color(color).size(size);
+pub(crate) fn caption_row(
+    ui: &mut egui::Ui,
+    text: &str,
+    size: f32,
+    color: Color32,
+    italics: bool,
+    family: Option<&str>,
+) {
+    let mut label = RichText::new(text)
+        .color(color)
+        .size(size)
+        .family(fonts::family(family));
     if italics {
         label = label.italics();
     }
