@@ -304,7 +304,7 @@ pub fn view_main(s: &State, _: &mut Cx<State>) -> El {
             a: 1.0,
         }
     };
-    let bg = rgba(settings.background_rgba());
+    let bg = t.bg;
 
     let mut captions = col().w_full().gap(6.0);
     if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
