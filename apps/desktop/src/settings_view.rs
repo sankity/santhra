@@ -1,8 +1,8 @@
 use rune::tok::{self, Theme, type_};
-use rune::{Cx, El, ScrollSpec, Tx, col, el, row, text};
+use rune::{Cx, El, ScrollSpec, col, el, row, text};
 
 use crate::app::{
-    FontChoice, Picker, Shared, State, leaked_family, refresh_model, rgba, toggle_overlay,
+    FontChoice, Picker, Screen, Shared, State, leaked_family, refresh_model, rgba, toggle_overlay,
 };
 use crate::fonts;
 use crate::settings::{self, Settings};
@@ -180,20 +180,8 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                 .px(16.0)
                 .gap(8.0)
                 .center_y()
-                .child(done_button()),
+                .child(button("Done", done)),
         )
-}
-
-fn done_button() -> El {
-    let t = tok::theme(true);
-    el().h(30.0)
-        .px(12.0)
-        .center_y()
-        .radius(8.0)
-        .fill(tok::accent(0, true))
-        .focusable(true)
-        .on_press_tx(done)
-        .child(text("Save and close").font(type_::LABEL).color(t.text))
 }
 
 fn menu(header: El, options: Vec<El>) -> El {
@@ -315,7 +303,7 @@ fn valid_hex(text: &str) -> bool {
     matches!(hex.len(), 6 | 8) && u32::from_str_radix(hex, 16).is_ok()
 }
 
-fn done(s: &mut State, tx: &mut Tx) {
+fn done(s: &mut State) {
     let shared = Shared::get();
     {
         let mut settings = shared.settings.lock().unwrap();
@@ -326,7 +314,7 @@ fn done(s: &mut State, tx: &mut Tx) {
     }
     shared.apply_settings();
     s.picker = None;
-    tx.close_window();
+    s.screen = Screen::Main;
 }
 
 macro_rules! setting_fn {

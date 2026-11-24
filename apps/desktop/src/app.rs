@@ -24,7 +24,6 @@ pub struct Shared {
     pub revision: AtomicUsize,
     pub wakers: Mutex<Vec<(&'static str, Waker)>>,
     pub overlay: Mutex<Option<WindowHandle>>,
-    pub settings_window: Mutex<Option<WindowHandle>>,
     pub sinks: Mutex<Option<Vec<audio_linux::Sink>>>,
     pub model_ok: AtomicBool,
     pub running: AtomicBool,
@@ -48,7 +47,6 @@ impl Shared {
                 revision: AtomicUsize::new(0),
                 wakers: Mutex::new(Vec::new()),
                 overlay: Mutex::new(None),
-                settings_window: Mutex::new(None),
                 sinks: Mutex::new(None),
                 model_ok: AtomicBool::new(model_ok),
                 running: AtomicBool::new(false),
@@ -111,6 +109,12 @@ pub fn leaked_family(name: &str) -> &'static str {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Main,
+    Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picker {
     Font,
     Source,
@@ -118,6 +122,7 @@ pub enum Picker {
 
 pub struct State {
     pub id: &'static str,
+    pub screen: Screen,
     pub picker: Option<Picker>,
     pub seen: usize,
     pub session: Option<Session>,
@@ -132,6 +137,7 @@ impl State {
         let settings = Shared::get().settings();
         State {
             id,
+            screen: Screen::Main,
             picker: None,
             seen: 0,
             session: None,
@@ -259,8 +265,7 @@ pub fn toggle_overlay(s: &mut State) {
 }
 
 pub fn open_settings(s: &mut State) {
-    crate::open_settings_window();
-    let _ = s;
+    s.screen = Screen::Settings;
 }
 
 pub fn refresh_model(s: &mut State) {
@@ -273,7 +278,10 @@ pub fn refresh_model(s: &mut State) {
     let _ = s;
 }
 
-pub fn view_main(s: &State, _: &mut Cx<State>) -> El {
+pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
+    if s.screen == Screen::Settings {
+        return crate::settings_view::view_settings(s, cx);
+    }
     let t = tok::theme(true);
     let shared = Shared::get();
     let settings = shared.settings();
@@ -393,9 +401,6 @@ pub fn on_close() {
     if let Some(handle) = shared.overlay.lock().unwrap().clone() {
         handle.close();
     }
-    if let Some(handle) = shared.settings_window.lock().unwrap().clone() {
-        handle.close();
-    }
     let _ = shared.settings.lock().unwrap().save();
 }
 
@@ -422,4 +427,9 @@ pub fn scene_captions(_: &mut State) {
         size: 32.0,
     };
     shared.revision.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Headless tooling scene: show the Settings layer inside the main window.
+pub fn scene_settings(s: &mut State) {
+    s.screen = Screen::Settings;
 }

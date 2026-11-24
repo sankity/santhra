@@ -20,7 +20,7 @@ fn main() {
         });
     let mut windows = vec![main];
     if settings.overlay_enabled {
-        windows.push(overlay_spec().state(State::new("main")));
+        windows.push(overlay_spec().state(State::new("overlay")));
     }
     rune::run_windows(|_| windows);
 }
@@ -29,7 +29,10 @@ fn main_spec() -> AppSpec<State> {
     AppSpec {
         setup: Some(app::setup),
         poll: Some(app::poll_main),
-        scenes: &[("captions", app::scene_captions)],
+        scenes: &[
+            ("captions", app::scene_captions),
+            ("settings", app::scene_settings),
+        ],
         ..AppSpec::new(
             "Santhra",
             (900.0, 600.0),
@@ -77,37 +80,6 @@ fn overlay_spec() -> WindowSpec<State> {
             max_size: Some((1600.0, 600.0)),
             ..Default::default()
         })
-}
-
-fn settings_spec() -> WindowSpec<State> {
-    let spec = AppSpec {
-        setup: Some(app::setup),
-        poll: Some(app::poll_readonly),
-        ..AppSpec::new(
-            "Settings",
-            (520.0, 640.0),
-            || State::new("settings"),
-            settings_view::view_settings,
-        )
-    };
-    WindowSpec::new("settings", spec).on_close(|s, _: &mut Tx| {
-        let _ = s;
-        let shared = Shared::get();
-        shared.apply_settings();
-        *shared.settings_window.lock().unwrap() = None;
-    })
-}
-
-pub(crate) fn open_settings_window() {
-    let shared = Shared::get();
-    let existing = { shared.settings_window.lock().unwrap().clone() };
-    match existing {
-        Some(handle) => handle.focus(),
-        None => {
-            let handle = rune::open_window(settings_spec());
-            *shared.settings_window.lock().unwrap() = Some(handle);
-        }
-    }
 }
 
 pub(crate) fn apply_overlay_options() {
