@@ -112,7 +112,7 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                         slider("threads", "Threads", settings.threads as f32, 1.0, 8.0, set_threads),
                         slider("lines", "Caption lines", settings.max_lines as f32, 1.0, 5.0, set_lines),
                     ],
-                ))
+                ).paint_order(if s.picker == Some(Picker::Source) { 10 } else { 0 }))
                 .child(section(
                     "Caption",
                     vec![
@@ -130,7 +130,7 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                         background_row(&settings),
                         toggle_row("Show partial results", settings.show_partial, move |s| set_show_partial(s, !settings.show_partial)),
                     ],
-                ))
+                ).paint_order(if s.picker == Some(Picker::Font) { 10 } else { 0 }))
                 .child(section(
                     "Startup",
                     vec![toggle_row(
@@ -184,12 +184,14 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
         )
 }
 
-fn menu(header: El, options: Vec<El>) -> El {
+fn menu(header: El, options: Vec<El>, header_extra: f32) -> El {
     let t = tok::theme(true);
-    let height = ((options.len() * 28 + 40).min(260)) as f32;
+    let height = ((options.len() * 28 + header_extra as usize + 8).min(260)) as f32;
+    // Anchored to the picker row; absolute keeps it out of flow so nothing below moves.
     col()
-        .w(340.0)
-        .h(height)
+        .absolute(112.0, 36.0)
+        .paint_order(10)
+        .size(340.0, height)
         .radius(8.0)
         .fill(t.card)
         .border(1.0, t.edge)
@@ -229,7 +231,9 @@ fn picker_row(
 ) -> El {
     let t = tok::theme(true);
     col()
-        .gap(4.0)
+        .h(32.0)
+        .w_full()
+        .paint_order(if open { 10 } else { 0 })
         .child(
             row()
                 .h(32.0)
@@ -256,7 +260,15 @@ fn picker_row(
                     .size(1.0, 1.0),
                 ),
         )
-        .child(if open { menu(header, options) } else { el() })
+        .child(if open {
+            menu(
+                header,
+                options,
+                if which == Picker::Font { 32.0 } else { 0.0 },
+            )
+        } else {
+            el()
+        })
 }
 
 fn toggle_picker(which: Picker) -> impl Fn(&mut State) {

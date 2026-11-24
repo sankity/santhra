@@ -433,3 +433,15 @@ pub fn scene_captions(_: &mut State) {
 pub fn scene_settings(s: &mut State) {
     s.screen = Screen::Settings;
 }
+
+/// Headless tooling scene: open the Font dropdown inside the Settings layer.
+pub fn scene_font_picker(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.picker = Some(Picker::Font);
+}
+
+/// Headless tooling scene: open the Audio source dropdown inside the Settings layer.
+pub fn scene_source_picker(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.picker = Some(Picker::Source);
+}
