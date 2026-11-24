@@ -6,9 +6,13 @@ use app_core::{Message, Session};
 use caption_core::CaptionSnapshot;
 use rune::tok::{self, type_};
 use rune::{
-    Color, Cx, El, Family, ScrollSpec, TextEdit, TextStyle, Waker, WindowHandle, col, el, row, text,
+    Color, Cx, El, Family, Icon, ScrollSpec, TextEdit, TextStyle, Tx, Waker, WindowHandle, col, el,
+    row, text,
 };
-use rune_kit::{Button, ComboboxEvent, ComboboxState, Kit, Toolbar};
+use rune_kit::{
+    Badge, BadgeVariant, Button, ButtonVariant, ComboboxEvent, ComboboxState, Kit, Sidebar,
+    SidebarRow, SidebarSection, Switch, glyphs, root,
+};
 use speech_sherpa::ModelKind;
 
 use crate::settings::Settings;
@@ -87,6 +91,16 @@ impl Shared {
         self.publish();
     }
 
+    /// Persist the current settings and repaint. Used by live settings edits, which do not
+    /// re-create the overlay window the way [`Self::apply_settings`] does.
+    pub fn save_settings(&self) {
+        let settings = self.settings();
+        let ok = model_ready(&settings);
+        self.model_ok.store(ok, Ordering::Relaxed);
+        let _ = settings.save();
+        self.publish();
+    }
+
     pub fn wake(&self) {
         for (_, waker) in self.wakers.lock().unwrap().iter() {
             waker();
@@ -126,22 +140,16 @@ pub fn leaked_family(name: &str) -> &'static str {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SettingsTab {
+pub enum Section {
+    Captions,
     Recognition,
     Appearance,
     About,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Screen {
-    Main,
-    Settings,
-}
-
 pub struct State {
     pub id: &'static str,
-    pub screen: Screen,
-    pub tab: SettingsTab,
+    pub section: Section,
     pub pending_model: Option<&'static str>,
     pub seen: usize,
     pub session: Option<Session>,
@@ -159,8 +167,7 @@ impl State {
         let settings = Shared::get().settings();
         State {
             id,
-            screen: Screen::Main,
-            tab: SettingsTab::Recognition,
+            section: Section::Captions,
             pending_model: None,
             seen: 0,
             session: None,
@@ -312,10 +319,6 @@ pub fn toggle_overlay(s: &mut State) {
     let _ = s;
 }
 
-pub fn open_settings(s: &mut State) {
-    s.screen = Screen::Settings;
-}
-
 pub fn refresh_model(s: &mut State) {
     let shared = Shared::get();
     let settings = shared.settings();
@@ -326,18 +329,65 @@ pub fn refresh_model(s: &mut State) {
     let _ = s;
 }
 
-pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
-    if s.screen == Screen::Settings {
-        return crate::settings_view::view_settings(s, cx);
-    }
+pub fn view_main(s: &State, _cx: &mut Cx<State>) -> El {
     let t = tok::theme(true);
     let shared = Shared::get();
     let settings = shared.settings();
-    let snapshot = shared.snapshot.lock().unwrap().clone();
+    let kit = Kit::neutral(true);
+    let mut overlays = Vec::new();
+
     let running = s.session.is_some();
     let model_ok = shared.model_ok.load(Ordering::Relaxed);
     let failed = !model_ok || s.status.starts_with("error") || s.status.starts_with("cannot");
-    let dot = if running {
+    let dot = status_dot(running, failed);
+
+    let content = match s.section {
+        Section::Captions => captions_body(s, shared, &settings, &kit),
+        Section::Recognition => {
+            crate::settings_view::recognition_body(s, &settings, &kit, &mut overlays)
+        }
+        Section::Appearance => {
+            crate::settings_view::appearance_body(s, &settings, &kit, &mut overlays)
+        }
+        Section::About => crate::settings_view::about_body(&kit),
+    };
+
+    let body = row()
+        .key("main")
+        .w_full()
+        .h_full()
+        .fill(t.bg)
+        .child(sidebar(s, &kit, &settings, running, model_ok, dot))
+        .child(el().w(1.0).h_full().fill(t.separator))
+        .child(
+            col()
+                .key("content")
+                .grow(1.0)
+                .min_w(0.0)
+                .h_full()
+                .child(
+                    row().w_full().px(24.0).pt(20.0).pb(4.0).child(
+                        text(section_title(s.section))
+                            .font(type_::TITLE)
+                            .color(t.text),
+                    ),
+                )
+                .child(content),
+        );
+    root(body, overlays)
+}
+
+fn section_title(section: Section) -> &'static str {
+    match section {
+        Section::Captions => "Captions",
+        Section::Recognition => "Recognition",
+        Section::Appearance => "Appearance",
+        Section::About => "About",
+    }
+}
+
+fn status_dot(running: bool, failed: bool) -> Color {
+    if running {
         Color {
             r: 0.30,
             g: 0.69,
@@ -358,70 +408,167 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
             b: 0.50,
             a: 1.0,
         }
-    };
-    let bg = t.bg;
-    let kit = Kit::neutral(true);
+    }
+}
 
+fn sidebar(
+    s: &State,
+    kit: &Kit,
+    settings: &Settings,
+    running: bool,
+    model_ok: bool,
+    dot: Color,
+) -> El {
+    let t = tok::theme(true);
+    let header = col()
+        .w_full()
+        .gap(10.0)
+        .child(text("Santhra").font(type_::TITLE).color(t.text))
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
+                .child(text(&s.status).font(type_::LABEL).color(t.text_secondary)),
+        )
+        .child(
+            row()
+                .gap(8.0)
+                .child(
+                    Button::new("Start")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(start_session)
+                        .build(kit),
+                )
+                .child(
+                    Button::new("Stop")
+                        .disabled(!running)
+                        .on_press(stop_session)
+                        .build(kit),
+                ),
+        )
+        .child(
+            Switch::new(settings.overlay_enabled)
+                .label("Overlay")
+                .on_toggle(toggle_overlay)
+                .build(kit),
+        );
+    let footer = row()
+        .gap(8.0)
+        .center_y()
+        .child(
+            Badge::new(if model_ok { "READY" } else { "NOT INSTALLED" })
+                .variant(if model_ok {
+                    BadgeVariant::Accent
+                } else {
+                    BadgeVariant::Neutral
+                })
+                .build(kit),
+        )
+        .child(
+            text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                .font(type_::LABEL)
+                .color(t.text_secondary),
+        );
+    col()
+        .key("sidebar-col")
+        .w(240.0)
+        .h_full()
+        .min_w(0.0)
+        .fill(t.card)
+        .child(
+            Sidebar::new()
+                .label("Santhra")
+                .header(header)
+                .section(view_section(s, kit))
+                .section(settings_section(s, kit))
+                .footer(footer)
+                .build(kit),
+        )
+}
+
+fn view_section(s: &State, kit: &Kit) -> SidebarSection {
+    SidebarSection::new("View").row(
+        SidebarRow::new("Captions")
+            .icon(&glyphs::MIC)
+            .selected(s.section == Section::Captions)
+            .on_select(|s: &mut State, _: &mut Tx| s.section = Section::Captions)
+            .build(kit),
+    )
+}
+
+fn settings_section(s: &State, kit: &Kit) -> SidebarSection {
+    SidebarSection::new("Settings")
+        .row(nav_row(
+            "Recognition",
+            &glyphs::SPARKLE,
+            Section::Recognition,
+            s,
+            kit,
+        ))
+        .row(nav_row(
+            "Appearance",
+            &glyphs::EYE,
+            Section::Appearance,
+            s,
+            kit,
+        ))
+        .row(nav_row("About", &glyphs::FILE_TEXT, Section::About, s, kit))
+}
+
+fn nav_row(label: &str, icon: &'static Icon, section: Section, s: &State, kit: &Kit) -> El {
+    SidebarRow::new(label)
+        .icon(icon)
+        .selected(s.section == section)
+        .on_select(move |s: &mut State, _: &mut Tx| s.section = section)
+        .build(kit)
+}
+
+fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> El {
+    let t = tok::theme(true);
+    let snapshot = shared.snapshot.lock().unwrap().clone();
+    let _ = s;
     let mut captions = col().w_full().gap(6.0);
     if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
         captions = captions.child(
-            text("No captions yet. Press Start, then play something.")
-                .font(type_::BODY)
-                .color(rgba(settings.text_rgba())),
+            col()
+                .gap(10.0)
+                .items_start()
+                .child(
+                    text("No captions yet.")
+                        .font(type_::BODY)
+                        .color(t.text_secondary),
+                )
+                .child(
+                    text("Press Start, then play something.")
+                        .font(type_::LABEL)
+                        .color(t.text_secondary),
+                )
+                .child(
+                    Button::new("Start")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(start_session)
+                        .build(kit),
+                ),
         );
     } else {
         for line in &snapshot.finals {
-            captions = captions.child(caption_line(&line.text, shared, false, &settings));
+            captions = captions.child(caption_line(&line.text, shared, false, settings));
         }
         if settings.show_partial && !snapshot.partial.is_empty() {
-            captions = captions.child(caption_line(&snapshot.partial, shared, true, &settings));
+            captions = captions.child(caption_line(&snapshot.partial, shared, true, settings));
         }
     }
-
-    let status = row()
-        .key("status")
-        .gap(8.0)
-        .center_y()
-        .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
-        .child(text(&s.status).font(type_::LABEL).color(t.text))
-        .child(if model_ok {
-            el()
-        } else {
-            text("model files not found").font(type_::LABEL).color(dot)
-        });
-    let toolbar = Toolbar::new()
-        .leading(Button::new("Start").on_press(start_session).build(&kit))
-        .leading(Button::new("Stop").on_press(stop_session).build(&kit))
-        .leading(
-            Button::new(if settings.overlay_enabled {
-                "Overlay: on"
-            } else {
-                "Overlay: off"
-            })
-            .on_press(toggle_overlay)
-            .build(&kit),
-        )
-        .center(status)
-        .trailing(Button::new("Settings").on_press(open_settings).build(&kit))
-        .build(&kit);
-
     col()
-        .key("main")
+        .key("captions")
+        .grow(1.0)
         .w_full()
-        .h_full()
-        .fill(bg)
-        .child(toolbar)
-        .child(
-            col()
-                .key("captions")
-                .grow(1.0)
-                .w_full()
-                .px(16.0)
-                .pb(16.0)
-                .scroll(ScrollSpec { stick_bottom: true })
-                .clip_rounded(0.0)
-                .child(captions),
-        )
+        .min_h(0.0)
+        .px(24.0)
+        .pb(24.0)
+        .scroll(ScrollSpec { stick_bottom: true })
+        .clip_rounded(0.0)
+        .child(captions)
 }
 
 fn caption_line(content: &str, shared: &Shared, italic: bool, settings: &Settings) -> El {
@@ -533,9 +680,10 @@ pub fn on_close() {
 }
 
 /// Headless tooling scene: caption text without a running audio/ASR session.
-pub fn scene_captions(_: &mut State) {
+pub fn scene_captions(s: &mut State) {
     use caption_core::CaptionLine;
 
+    s.section = Section::Captions;
     let shared = Shared::get();
     *shared.snapshot.lock().unwrap() = CaptionSnapshot {
         partial: String::new(),
@@ -557,65 +705,49 @@ pub fn scene_captions(_: &mut State) {
     shared.revision.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Headless tooling scene: show the Settings layer inside the main window.
-pub fn scene_settings(s: &mut State) {
-    s.screen = Screen::Settings;
+/// Headless tooling scenes: one per section.
+pub fn scene_recognition(s: &mut State) {
+    s.section = Section::Recognition;
 }
 
-/// Headless tooling scene: open the Font dropdown inside the Settings layer.
+pub fn scene_appearance(s: &mut State) {
+    s.section = Section::Appearance;
+}
+
+pub fn scene_about(s: &mut State) {
+    s.section = Section::About;
+}
+
+/// Headless tooling scene: open the Font dropdown.
 pub fn scene_font_picker(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Appearance;
+    s.section = Section::Appearance;
     let current = Shared::get().settings().font_family;
     s.font_combo.step(ComboboxEvent::Toggle {
         current: current.as_deref(),
     });
 }
 
-/// Headless tooling scene: open the Audio source dropdown inside the Settings layer.
+/// Headless tooling scene: open the Audio source dropdown.
 pub fn scene_source_picker(s: &mut State) {
-    s.screen = Screen::Settings;
+    s.section = Section::Recognition;
     let current = Shared::get().settings().target;
     s.source_combo.step(ComboboxEvent::Toggle {
         current: current.as_deref(),
     });
 }
 
-/// Headless tooling scenes: one per Settings tab.
-pub fn scene_settings_captions(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Appearance;
-}
-
-pub fn scene_settings_overlay(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Appearance;
-}
-
-pub fn scene_settings_about(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::About;
-}
-
-/// Headless tooling scene: show the Model tab.
-pub fn scene_settings_model(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Recognition;
-}
-
-/// Headless tooling scenes: open pickers in the Settings layer.
+/// Headless tooling scene: open the Language dropdown.
 pub fn scene_language_picker(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Recognition;
+    s.section = Section::Recognition;
     let current = Shared::get().settings().language;
     s.language_combo.step(ComboboxEvent::Toggle {
         current: current.as_deref(),
     });
 }
 
+/// Headless tooling scene: open the Model dropdown.
 pub fn scene_model_picker(s: &mut State) {
-    s.screen = Screen::Settings;
-    s.tab = SettingsTab::Recognition;
+    s.section = Section::Recognition;
     let current = s
         .pending_model
         .map(str::to_owned)
