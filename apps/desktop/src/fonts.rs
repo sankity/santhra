@@ -1,7 +1,13 @@
 use std::process::Command;
+use std::sync::OnceLock;
 
-/// Installed font families reported by fontconfig.
-pub fn installed() -> Vec<String> {
+/// Installed font families, enumerated once per process. `fc-list` can report thousands.
+pub fn families() -> &'static [String] {
+    static FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
+    FAMILIES.get_or_init(query)
+}
+
+fn query() -> Vec<String> {
     let output = match Command::new("fc-list")
         .args(["--format", "%{file}\t%{family}\t%{style}\n"])
         .output()

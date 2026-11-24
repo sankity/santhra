@@ -1,24 +1,76 @@
-use rune::tok::{self, type_};
+use rune::tok::{self, Theme, type_};
 use rune::{Cx, El, ScrollSpec, Tx, col, el, row, text};
 
 use crate::app::{
     FontChoice, Picker, Shared, State, leaked_family, refresh_model, rgba, toggle_overlay,
 };
+use crate::fonts;
 use crate::settings::{self, Settings};
 use crate::widgets::{button, section, slider, text_field, toggle_row};
+
+const MAX_FONT_OPTIONS: usize = 60;
 
 pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
     let t = tok::theme(true);
     let shared = Shared::get();
-    {
-        let mut sinks = shared.sinks.lock().unwrap();
-        if sinks.is_none() {
-            *sinks = Some(audio_linux::list_sinks());
-        }
-    }
     let settings = shared.settings();
 
-    let picker = picker(s, &settings);
+    // Build menu rows only while the matching picker is open. fc-list reports ~2000 families.
+    let (audio_options, audio_header) = if s.picker == Some(Picker::Source) {
+        {
+            let mut sinks = shared.sinks.lock().unwrap();
+            if sinks.is_none() {
+                *sinks = Some(audio_linux::list_sinks());
+            }
+        }
+        let sinks = { shared.sinks.lock().unwrap().clone().unwrap_or_default() };
+        let mut options = vec![option(t, "Default sink", settings.target.is_none(), |s| {
+            set_source(s, None)
+        })];
+        for sink in sinks {
+            let name = sink.name.clone();
+            let selected = settings.target.as_deref() == Some(name.as_str());
+            options.push(option(t, &sink.description, selected, move |s| {
+                set_source(s, Some(name.clone()))
+            }));
+        }
+        (options, el())
+    } else {
+        (Vec::new(), el())
+    };
+
+    let (font_options, font_header) = if s.picker == Some(Picker::Font) {
+        let query = s.font_query.text.trim().to_lowercase();
+        let selected = settings.font_family.as_deref().unwrap_or("");
+        let mut names: Vec<&str> = fonts::families()
+            .iter()
+            .map(String::as_str)
+            .filter(|name| query.is_empty() || name.to_lowercase().contains(&query))
+            .collect();
+        if !selected.is_empty() && !names.contains(&selected) {
+            names.insert(0, selected);
+        }
+        let mut options = vec![option(
+            t,
+            "System default",
+            settings.font_family.is_none(),
+            |s| set_font(s, None),
+        )];
+        for name in names.into_iter().take(MAX_FONT_OPTIONS) {
+            let selected = settings.font_family.as_deref() == Some(name);
+            let name = name.to_owned();
+            let label = name.clone();
+            options.push(option(t, &label, selected, move |s| {
+                set_font(s, Some(name.clone()))
+            }));
+        }
+        (
+            options,
+            text_field("font-search", &s.font_query, |s| &mut s.font_query),
+        )
+    } else {
+        (Vec::new(), el())
+    };
 
     col()
         .key("settings")
@@ -52,6 +104,8 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                             Picker::Source,
                             s.picker == Some(Picker::Source),
                             toggle_picker(Picker::Source),
+                            audio_options,
+                            audio_header,
                         ),
                         labelled("Model directory", text_field("model-dir", &s.model_dir, |s| &mut s.model_dir)),
                         button("Refresh model check", refresh_model),
@@ -68,6 +122,8 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                             Picker::Font,
                             s.picker == Some(Picker::Font),
                             toggle_picker(Picker::Font),
+                            font_options,
+                            font_header,
                         ),
                         slider("font-size", "Font size", settings.font_size, 12.0, 72.0, set_font_size),
                         labelled("Text colour", text_field("text-colour", &s.text_hex, |s| &mut s.text_hex)),
@@ -126,7 +182,6 @@ pub fn view_settings(s: &State, _: &mut Cx<State>) -> El {
                 .center_y()
                 .child(done_button()),
         )
-        .child(picker)
 }
 
 fn done_button() -> El {
@@ -141,56 +196,25 @@ fn done_button() -> El {
         .child(text("Save and close").font(type_::LABEL).color(t.text))
 }
 
-fn picker(s: &State, settings: &Settings) -> El {
-    match s.picker {
-        None => el(),
-        Some(Picker::Font) => {
-            let mut list = option("System default", settings.font_family.is_none(), |s| {
-                set_font(s, None)
-            });
-            for name in &s.families {
-                let selected = settings.font_family.as_deref() == Some(name.as_str());
-                let name = name.clone();
-                let label = name.clone();
-                list = list.child(option(&label, selected, move |s| {
-                    set_font(s, Some(name.clone()))
-                }));
-            }
-            popup(list, 220.0)
-        }
-        Some(Picker::Source) => {
-            let shared = Shared::get();
-            let sinks = shared.sinks.lock().unwrap().clone().unwrap_or_default();
-            let mut list = option("Default sink", settings.target.is_none(), |s| {
-                set_source(s, None)
-            });
-            for sink in sinks {
-                let name = sink.name.clone();
-                let selected = settings.target.as_deref() == Some(name.as_str());
-                list = list.child(option(&sink.description, selected, move |s| {
-                    set_source(s, Some(name.clone()))
-                }));
-            }
-            popup(list, 220.0)
-        }
-    }
-}
-
-fn popup(list: El, height: f32) -> El {
-    el().absolute(16.0, 52.0)
-        .size(340.0, height)
+fn menu(header: El, options: Vec<El>) -> El {
+    let t = tok::theme(true);
+    let height = ((options.len() * 28 + 40).min(260)) as f32;
+    col()
+        .w(340.0)
+        .h(height)
         .radius(8.0)
-        .fill(tok::theme(true).card)
-        .border(1.0, tok::theme(true).edge)
+        .fill(t.card)
+        .border(1.0, t.edge)
+        .padding(4.0)
+        .gap(2.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .clip_rounded(8.0)
-        .child(list.gap(2.0))
+        .child(header)
+        .children(options)
 }
 
-fn option(label: &str, selected: bool, press: impl Fn(&mut State) + 'static) -> El {
-    let t = tok::theme(true);
+fn option(t: Theme, label: &str, selected: bool, press: impl Fn(&mut State) + 'static) -> El {
     row()
         .h(28.0)
         .px(8.0)
@@ -212,32 +236,39 @@ fn picker_row(
     which: Picker,
     open: bool,
     toggle: impl Fn(&mut State) + 'static,
+    options: Vec<El>,
+    header: El,
 ) -> El {
     let t = tok::theme(true);
-    row()
-        .h(32.0)
-        .gap(12.0)
-        .center_y()
-        .on_press(toggle)
+    col()
+        .gap(4.0)
         .child(
-            text(label)
-                .w(112.0)
-                .font(type_::LABEL)
-                .color(t.text_secondary),
+            row()
+                .h(32.0)
+                .gap(12.0)
+                .center_y()
+                .on_press(toggle)
+                .child(
+                    text(label)
+                        .w(112.0)
+                        .font(type_::LABEL)
+                        .color(t.text_secondary),
+                )
+                .child(text(value.to_owned()).font(type_::BODY).color(t.text))
+                .child(
+                    text(if open { "▴" } else { "▾" })
+                        .font(type_::BODY)
+                        .color(t.text_secondary),
+                )
+                .child(
+                    el().key(match which {
+                        Picker::Font => "font-picker-anchor",
+                        Picker::Source => "source-picker-anchor",
+                    })
+                    .size(1.0, 1.0),
+                ),
         )
-        .child(text(value.to_owned()).font(type_::BODY).color(t.text))
-        .child(
-            text(if open { "▴" } else { "▾" })
-                .font(type_::BODY)
-                .color(t.text_secondary),
-        )
-        .child(
-            el().key(match which {
-                Picker::Font => "font-picker-anchor",
-                Picker::Source => "source-picker-anchor",
-            })
-            .size(1.0, 1.0),
-        )
+        .child(if open { menu(header, options) } else { el() })
 }
 
 fn toggle_picker(which: Picker) -> impl Fn(&mut State) {

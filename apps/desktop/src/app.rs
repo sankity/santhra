@@ -10,7 +10,6 @@ use rune::{
     Color, Cx, El, Family, ScrollSpec, TextEdit, TextStyle, Waker, WindowHandle, col, el, row, text,
 };
 
-use crate::fonts;
 use crate::settings::Settings;
 use crate::widgets::button;
 
@@ -125,7 +124,7 @@ pub struct State {
     pub status: String,
     pub model_dir: TextEdit,
     pub text_hex: TextEdit,
-    pub families: Vec<String>,
+    pub font_query: TextEdit,
 }
 
 impl State {
@@ -139,7 +138,7 @@ impl State {
             status: "Idle".into(),
             model_dir: TextEdit::new(settings.model_dir.clone()),
             text_hex: TextEdit::new(settings.text_color.clone()),
-            families: fonts::installed(),
+            font_query: TextEdit::new(String::new()),
         }
     }
 }
