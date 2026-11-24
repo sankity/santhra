@@ -12,7 +12,7 @@ path = "src/main.rs"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
-eframe = "0.37"
+rune = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
 app-core = { path = "../../crates/app-core" }
 audio-linux = { path = "../../crates/audio-linux" }
 caption-core = { path = "../../crates/caption-core" }

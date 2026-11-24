@@ -1,20 +1,24 @@
 # Overlay support
 
-The caption overlay is an undecorated eframe viewport. The app exposes every FR-05 control, but the
-compositor decides which ones it honors.
+The caption overlay is an undecorated Rune window. The compositor decides which window controls
+it honours.
 
-| Feature | Wayland (winit 0.30) | X11 |
+| Feature | Wayland | X11 |
 |---|---|---|
-| Floating window | yes | yes |
+| Floating window | with a compositor window rule | yes |
 | Drag to move | yes (`xdg_toplevel.move`) | yes |
-| Resize by dragging an edge or corner | yes (`xdg_toplevel.resize`) | yes |
+| Resize by dragging an edge or corner | **no** | **no** |
 | Transparent background | yes | yes |
 | Click-through | yes (empty `wl_surface` input region) | yes |
 | Always-on-top | **no** (`set_window_level` is a no-op) | yes |
 | Restore position | **no** (no window-position protocol) | yes |
 
-Verified on GNOME/Wayland, Intel UHD 620, wgpu/Vulkan. The settings window warns about the two
-Wayland gaps when `WAYLAND_DISPLAY` is set.
+Overlay width and height are configured in Settings and applied when the overlay opens. They are
+not applied live: Rune has no interactive-resize API and this compositor ignores client-requested
+Wayland resizes. Changing either value takes effect after closing and reopening the overlay.
+
+Verified on Umbriel/Wayland with Rune. The settings window
+warns about the two Wayland gaps when `WAYLAND_DISPLAY` is set.
 
 Scrolling compositors (Umbriel, niri) open every new window tiled, and a Wayland client cannot ask
 to float, so the overlay would open as a scroll column. Add a window rule to float it:
@@ -25,16 +29,14 @@ match.title = "^Santhra captions$"
 default_floating = true
 ```
 
-The app's requested size (720×180 by default) is used as the floating size, and the width/height
-sliders keep working after that.
-
 Captions are anchored to the bottom edge: when the text is taller than the overlay, the oldest
 lines are clipped off the top so the newest words stay readable.
 
-The overlay keeps updating when the main window is minimized, covered, or unfocused; it is a
-deferred viewport and repaints independently of the main window.
+The overlay keeps updating when the main window is minimized, covered, or unfocused; it is an
+independent Rune window with its own retained tree and repaint loop.
 
-Move and resize need pointer input, so both are unavailable while click-through is enabled.
+Move and click-through need pointer input: dragging moves the window only while click-through is
+off.
 
 To check the X11-only features: log into an X11 session and run
 `cargo run -p santhra-desktop`, then enable the overlay and toggle always-on-top.

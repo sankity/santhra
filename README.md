@@ -60,9 +60,10 @@ dropped into `~/.local/share/fonts` show up after `fc-cache -f`.
 
 ### Floating overlay
 
-The overlay is an undecorated, translucent caption window. On Wayland it can float, be dragged,
-resized from any edge, and click through, but always-on-top and position restore are not supported
-by winit. `docs/overlay-support.md` has the full capability matrix.
+The overlay is an undecorated, translucent caption window rendered by Rune. On Wayland it can
+float, be dragged, and click through, but always-on-top and position restore are not supported by
+winit. Overlay width and height are set in Settings and applied when the overlay opens; live
+edge-resize is not available. `docs/overlay-support.md` has the full capability matrix.
 
 ## Testing
 

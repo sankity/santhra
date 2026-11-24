@@ -13,3 +13,16 @@ resolver = "3"
 edition = "2024"
 license = "GPL-3.0-or-later"
 version = "0.1.0"
+
+# Rune is pre-release: pin one rev for the crate and every patch it needs.
+# Cargo does not inherit a dependency's [patch] table. Keep wgpu/naga/wgpu-hal at
+# 30.0.1 in Cargo.lock; 30.0.2 makes these vendored patches unused.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
