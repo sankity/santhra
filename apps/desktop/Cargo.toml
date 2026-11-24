@@ -13,7 +13,10 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 rune = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "cabdef14985af978827c4b396f3dbe220e0dc045" }
 app-core = { path = "../../crates/app-core" }
 audio-linux = { path = "../../crates/audio-linux" }
 caption-core = { path = "../../crates/caption-core" }
 speech-sherpa = { path = "../../crates/speech-sherpa" }
+santhra-models = { path = "../../crates/santhra-models" }
+santhra-download = { path = "../../crates/santhra-download" }

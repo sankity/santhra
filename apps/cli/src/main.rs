@@ -5,8 +5,12 @@ use anyhow::{Context, Result, bail};
 use app_core::{Message, Session, SessionOptions};
 use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
 use clap::{Args, Parser, Subcommand};
+use santhra_download::{Progress, download_all};
+use santhra_models::{
+    Language, ModelKind as CatalogKind, default_for, entry, for_language, model_dir, models_root,
+};
 use sherpa_onnx::Wave;
-use speech_sherpa::{AsrOptions, ModelFiles};
+use speech_sherpa::{AsrOptions, ModelFiles, ModelKind};
 
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
 
@@ -23,6 +27,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Models {
+        #[command(subcommand)]
+        action: ModelsCommand,
+    },
     Transcribe {
         wav: PathBuf,
         #[command(flatten)]
@@ -39,6 +47,21 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ModelsCommand {
+    List {
+        #[arg(long)]
+        language: Option<String>,
+    },
+    Download {
+        id: String,
+    },
+    Verify {
+        id: String,
+    },
+    Root,
+}
+
 #[derive(Args)]
 struct Common {
     #[arg(long, default_value = DEFAULT_MODEL_DIR)]
@@ -53,6 +76,22 @@ struct Common {
     #[arg(long, default_value = "cpu")]
     provider: String,
 
+    #[arg(long, help = "Language: english, chinese, indonesia or multilingual")]
+    language: Option<String>,
+
+    #[arg(
+        long,
+        help = "Model id from `models list`; defaults to the legacy --model-dir"
+    )]
+    model: Option<String>,
+
+    #[arg(
+        long,
+        default_value_t = 2500,
+        help = "Buffer size for offline models, in ms"
+    )]
+    buffer_ms: u32,
+
     #[arg(
         long,
         default_value_t = 2,
@@ -65,11 +104,54 @@ struct Common {
 }
 
 impl Common {
+    fn language(&self) -> Option<Language> {
+        self.language.as_deref().and_then(Language::parse)
+    }
+
+    fn selected(&self) -> Result<Option<&'static santhra_models::ModelEntry>> {
+        if let Some(id) = &self.model {
+            return entry(id)
+                .map(Some)
+                .with_context(|| format!("unknown model id: {id}"));
+        }
+        Ok(self.language().map(default_for))
+    }
+
+    fn model_dir(&self) -> Result<PathBuf> {
+        match self.selected()? {
+            Some(item) => model_dir(item.id),
+            None => Ok(self.model_dir.clone()),
+        }
+    }
+
+    fn model_kind(&self) -> ModelKind {
+        match self.selected() {
+            Ok(Some(item)) => match item.kind {
+                CatalogKind::ZipformerTransducer => ModelKind::ZipformerTransducer,
+                CatalogKind::ParaformerOnline => ModelKind::ParaformerOnline,
+                CatalogKind::ParaformerOffline => ModelKind::ParaformerOffline,
+                CatalogKind::WhisperOffline => ModelKind::WhisperOffline,
+            },
+            _ => ModelKind::ZipformerTransducer,
+        }
+    }
+
+    fn whisper_language(&self) -> Option<String> {
+        match self.language() {
+            Some(Language::English) => Some("en".into()),
+            Some(Language::Chinese) => Some("zh".into()),
+            Some(Language::Indonesia) => Some("id".into()),
+            Some(Language::Multilingual) | None => None,
+        }
+    }
+
     fn options(&self) -> AsrOptions {
         AsrOptions {
             chunk_ms: self.chunk_ms,
             threads: self.threads,
             provider: self.provider.clone(),
+            buffer_ms: self.buffer_ms,
+            language: self.whisper_language(),
         }
     }
 
@@ -80,15 +162,18 @@ impl Common {
         })
     }
 
-    fn session_options(&self, target: Option<String>) -> SessionOptions {
-        SessionOptions {
+    fn session_options(&self, target: Option<String>) -> Result<SessionOptions> {
+        Ok(SessionOptions {
             target,
-            model_dir: self.model_dir.clone(),
+            model_dir: self.model_dir()?,
+            model_kind: self.model_kind().as_str().to_owned(),
+            buffer_ms: self.buffer_ms,
+            language: self.whisper_language(),
             threads: self.threads,
             provider: self.provider.clone(),
             max_lines: self.max_lines,
             show_partial: !self.no_partial,
-        }
+        })
     }
 }
 
@@ -120,7 +205,7 @@ impl Printer {
 }
 
 fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
-    let model = ModelFiles::load(&common.model_dir)?;
+    let model = ModelFiles::load_kind(&common.model_dir()?, common.model_kind())?;
     let wave = Wave::read(&wav.display().to_string())
         .with_context(|| format!("cannot read WAV: {}", wav.display()))?;
     let mut captions = common.captions();
@@ -137,7 +222,7 @@ fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
 }
 
 fn live(target: Option<String>, common: Common) -> Result<()> {
-    let session = Session::start(common.session_options(target))?;
+    let session = Session::start(common.session_options(target)?)?;
     let mut printer = Printer::default();
     for message in session.messages() {
         match message {
@@ -154,8 +239,60 @@ fn live(target: Option<String>, common: Common) -> Result<()> {
     Ok(())
 }
 
+fn models_command(action: ModelsCommand) -> Result<()> {
+    match action {
+        ModelsCommand::Root => println!("{}", models_root().display()),
+        ModelsCommand::List { language } => {
+            let filter = language.as_deref().and_then(Language::parse);
+            for item in santhra_models::catalog() {
+                if filter.is_some_and(|lang| !santhra_models::matches_language(item.language, lang))
+                {
+                    continue;
+                }
+                let installed = santhra_models::resolve(item, &model_dir(item.id)?).is_ok();
+                println!(
+                    "{:<26} {:<12} {:<18} {:>10} MB  {}",
+                    item.id,
+                    item.language.as_str(),
+                    item.kind.as_str(),
+                    item.total_bytes() / 1_000_000,
+                    if installed {
+                        "installed"
+                    } else {
+                        "not downloaded"
+                    }
+                );
+            }
+            if let Some(lang) = filter {
+                let _ = for_language(lang);
+            }
+        }
+        ModelsCommand::Download { id } => {
+            let item = entry(&id).with_context(|| format!("unknown model id: {id}"))?;
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            download_all(item, &cancel, |progress| match progress {
+                Progress::Start { file, bytes } => println!("downloading {file} ({bytes} bytes)"),
+                Progress::Bytes { done, total, .. } => {
+                    let pct = done.saturating_mul(100).checked_div(total).unwrap_or(0);
+                    print!("\r\x1b[K  {pct}% ({done}/{total})");
+                    let _ = std::io::stdout().flush();
+                }
+                Progress::Done { file } => println!("\r\x1b[K  {file}: ok"),
+            })?;
+            println!("model {id} is ready");
+        }
+        ModelsCommand::Verify { id } => {
+            let item = entry(&id).with_context(|| format!("unknown model id: {id}"))?;
+            santhra_models::resolve(item, &model_dir(item.id)?)?;
+            println!("model {id} is valid");
+        }
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Models { action } => models_command(action),
         Command::Transcribe { wav, common } => transcribe_wav(wav, common),
         Command::Live { target, common } => live(target, common),
     }

@@ -1,6 +1,5 @@
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use app_core::{Message, Session};
@@ -9,6 +8,7 @@ use rune::tok::{self, type_};
 use rune::{
     Color, Cx, El, Family, ScrollSpec, TextEdit, TextStyle, Waker, WindowHandle, col, el, row, text,
 };
+use speech_sherpa::ModelKind;
 
 use crate::settings::Settings;
 use crate::widgets::button;
@@ -18,8 +18,23 @@ pub struct FontChoice {
     pub size: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DownloadStatus {
+    Idle,
+    Running {
+        id: String,
+        file: String,
+        done: u64,
+        total: u64,
+    },
+    Done(String),
+    Failed(String),
+}
+
 pub struct Shared {
     pub settings: Mutex<Settings>,
+    pub download: Mutex<DownloadStatus>,
+    pub download_cancel: Arc<AtomicBool>,
     pub snapshot: Mutex<CaptionSnapshot>,
     pub revision: AtomicUsize,
     pub wakers: Mutex<Vec<(&'static str, Waker)>>,
@@ -40,9 +55,11 @@ impl Shared {
                 family: settings.font_family.as_deref().map(leaked_family),
                 size: settings.font_size,
             });
-            let model_ok = speech_sherpa::ModelFiles::load(Path::new(&settings.model_dir)).is_ok();
+            let model_ok = model_ready(&settings);
             Shared {
                 settings: Mutex::new(settings),
+                download: Mutex::new(DownloadStatus::Idle),
+                download_cancel: Arc::new(AtomicBool::new(false)),
                 snapshot: Mutex::new(CaptionSnapshot::default()),
                 revision: AtomicUsize::new(0),
                 wakers: Mutex::new(Vec::new()),
@@ -58,7 +75,7 @@ impl Shared {
 
     pub fn apply_settings(&self) {
         let settings = self.settings();
-        let ok = speech_sherpa::ModelFiles::load(Path::new(&settings.model_dir)).is_ok();
+        let ok = model_ready(&settings);
         self.model_ok.store(ok, Ordering::Relaxed);
         let _ = settings.save();
         *self.font.lock().unwrap() = FontChoice {
@@ -110,9 +127,8 @@ pub fn leaked_family(name: &str) -> &'static str {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsTab {
-    Session,
-    Captions,
-    Overlay,
+    Recognition,
+    Appearance,
     About,
 }
 
@@ -126,6 +142,8 @@ pub enum Screen {
 pub enum Picker {
     Font,
     Source,
+    Language,
+    Model,
 }
 
 pub struct State {
@@ -133,10 +151,10 @@ pub struct State {
     pub screen: Screen,
     pub tab: SettingsTab,
     pub picker: Option<Picker>,
+    pub pending_model: Option<&'static str>,
     pub seen: usize,
     pub session: Option<Session>,
     pub status: String,
-    pub model_dir: TextEdit,
     pub text_hex: TextEdit,
     pub font_query: TextEdit,
 }
@@ -147,15 +165,37 @@ impl State {
         State {
             id,
             screen: Screen::Main,
-            tab: SettingsTab::Session,
+            tab: SettingsTab::Recognition,
             picker: None,
+            pending_model: None,
             seen: 0,
             session: None,
             status: "Idle".into(),
-            model_dir: TextEdit::new(settings.model_dir.clone()),
             text_hex: TextEdit::new(settings.text_color.clone()),
             font_query: TextEdit::new(String::new()),
         }
+    }
+}
+
+pub fn model_ready(settings: &Settings) -> bool {
+    let legacy = std::path::Path::new(&settings.model_dir);
+    match settings.model_id.as_deref().and_then(santhra_models::entry) {
+        Some(entry) => {
+            santhra_models::model_dir(entry.id)
+                .map(|dir| santhra_models::files_present(entry, &dir))
+                .unwrap_or(false)
+                || speech_sherpa::ModelFiles::load_kind(legacy, model_kind(entry.kind)).is_ok()
+        }
+        None => speech_sherpa::ModelFiles::load(legacy).is_ok(),
+    }
+}
+
+fn model_kind(kind: santhra_models::ModelKind) -> ModelKind {
+    match kind {
+        santhra_models::ModelKind::ZipformerTransducer => ModelKind::ZipformerTransducer,
+        santhra_models::ModelKind::ParaformerOnline => ModelKind::ParaformerOnline,
+        santhra_models::ModelKind::ParaformerOffline => ModelKind::ParaformerOffline,
+        santhra_models::ModelKind::WhisperOffline => ModelKind::WhisperOffline,
     }
 }
 
@@ -281,7 +321,7 @@ pub fn open_settings(s: &mut State) {
 pub fn refresh_model(s: &mut State) {
     let shared = Shared::get();
     let settings = shared.settings();
-    let ok = speech_sherpa::ModelFiles::load(Path::new(&settings.model_dir)).is_ok();
+    let ok = model_ready(&settings);
     shared.model_ok.store(ok, Ordering::Relaxed);
     *shared.sinks.lock().unwrap() = Some(audio_linux::list_sinks());
     shared.publish();
@@ -406,6 +446,84 @@ pub fn background_rgba(settings: &Settings) -> Color {
     rgba([r, g, b, a])
 }
 
+pub fn start_download(id: &str) {
+    let shared = Shared::get();
+    let Some(entry) = santhra_models::entry(id) else {
+        return;
+    };
+    shared.download_cancel.store(false, Ordering::Relaxed);
+    {
+        *shared.download.lock().unwrap() = DownloadStatus::Running {
+            id: id.to_owned(),
+            file: String::new(),
+            done: 0,
+            total: entry.total_bytes(),
+        };
+    }
+    shared.publish();
+    let cancel = shared.download_cancel.clone();
+    std::thread::spawn(move || {
+        let result = santhra_download::download_all(entry, &cancel, |progress| {
+            use santhra_download::Progress;
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let status = match progress {
+                Progress::Start { file, bytes } => DownloadStatus::Running {
+                    id: entry.id.into(),
+                    file: file.into(),
+                    done: 0,
+                    total: bytes,
+                },
+                Progress::Bytes { file, done, total } => DownloadStatus::Running {
+                    id: entry.id.into(),
+                    file: file.into(),
+                    done,
+                    total,
+                },
+                Progress::Done { .. } => return,
+            };
+            *shared.download.lock().unwrap() = status;
+            shared.publish();
+        });
+        let status = match result {
+            Ok(()) => {
+                let settings = shared.settings();
+                let ok = model_ready(&settings);
+                shared.model_ok.store(ok, Ordering::Relaxed);
+                DownloadStatus::Done(entry.id.into())
+            }
+            Err(_err) if cancel.load(Ordering::Relaxed) => {
+                DownloadStatus::Failed("cancelled".into())
+            }
+            Err(err) => DownloadStatus::Failed(format!("{err:#}")),
+        };
+        *shared.download.lock().unwrap() = status;
+        shared.publish();
+    });
+}
+
+pub fn cancel_download() {
+    Shared::get().download_cancel.store(true, Ordering::Relaxed);
+}
+
+pub fn use_model(id: &str) {
+    let Some(entry) = santhra_models::entry(id) else {
+        return;
+    };
+    let shared = Shared::get();
+    {
+        let mut settings = shared.settings.lock().unwrap();
+        settings.model_id = Some(id.to_owned());
+        settings.model_kind = Some(entry.kind.as_str().to_owned());
+        settings.model_dir = santhra_models::model_dir(id)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| settings.model_dir.clone());
+        settings.language = Some(entry.language.as_str().to_owned());
+    }
+    shared.apply_settings();
+}
+
 pub fn on_close() {
     let shared = Shared::get();
     if let Some(handle) = shared.overlay.lock().unwrap().clone() {
@@ -447,7 +565,7 @@ pub fn scene_settings(s: &mut State) {
 /// Headless tooling scene: open the Font dropdown inside the Settings layer.
 pub fn scene_font_picker(s: &mut State) {
     s.screen = Screen::Settings;
-    s.tab = SettingsTab::Captions;
+    s.tab = SettingsTab::Appearance;
     s.picker = Some(Picker::Font);
 }
 
@@ -460,15 +578,34 @@ pub fn scene_source_picker(s: &mut State) {
 /// Headless tooling scenes: one per Settings tab.
 pub fn scene_settings_captions(s: &mut State) {
     s.screen = Screen::Settings;
-    s.tab = SettingsTab::Captions;
+    s.tab = SettingsTab::Appearance;
 }
 
 pub fn scene_settings_overlay(s: &mut State) {
     s.screen = Screen::Settings;
-    s.tab = SettingsTab::Overlay;
+    s.tab = SettingsTab::Appearance;
 }
 
 pub fn scene_settings_about(s: &mut State) {
     s.screen = Screen::Settings;
     s.tab = SettingsTab::About;
+}
+
+/// Headless tooling scene: show the Model tab.
+pub fn scene_settings_model(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::Recognition;
+}
+
+/// Headless tooling scenes: open pickers in the Settings layer.
+pub fn scene_language_picker(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::Recognition;
+    s.picker = Some(Picker::Language);
+}
+
+pub fn scene_model_picker(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::Recognition;
+    s.picker = Some(Picker::Model);
 }

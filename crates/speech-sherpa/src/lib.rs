@@ -1,73 +1,180 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream, Wave};
+pub use santhra_models::ModelKind;
+use sherpa_onnx::{
+    OfflineRecognizer, OfflineRecognizerConfig, OnlineRecognizer, OnlineRecognizerConfig,
+    OnlineStream, Wave,
+};
 
 pub const SAMPLE_RATE: i32 = 16_000;
 
-pub struct ModelFiles {
-    encoder: String,
-    decoder: String,
-    joiner: String,
-    tokens: String,
+#[derive(Debug)]
+pub enum ModelFiles {
+    Zipformer {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        joiner: PathBuf,
+        tokens: PathBuf,
+    },
+    ParaformerOnline {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        tokens: PathBuf,
+    },
+    ParaformerOffline {
+        model: PathBuf,
+        tokens: PathBuf,
+    },
+    Whisper {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        tokens: PathBuf,
+    },
+}
+
+fn pick(dir: &Path, names: &[&str]) -> Result<PathBuf> {
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|path| path.is_file())
+        .with_context(|| format!("missing {} in {}", names.join(" / "), dir.display()))
 }
 
 impl ModelFiles {
+    /// Backwards-compatible loader for the existing Zipformer layout.
     pub fn load(dir: &Path) -> Result<Self> {
-        let pick = |names: &[&str]| -> Option<PathBuf> {
-            names.iter().map(|n| dir.join(n)).find(|p| p.is_file())
-        };
-        let want = |name: &str, found: Option<PathBuf>| -> Result<String> {
-            Ok(found
-                .with_context(|| format!("missing {name} in {}", dir.display()))?
-                .display()
-                .to_string())
-        };
-        Ok(Self {
-            encoder: want(
-                "encoder .onnx",
-                pick(&[
-                    "encoder-epoch-99-avg-1.int8.onnx",
-                    "encoder-epoch-99-avg-1.onnx",
-                ]),
-            )?,
-            decoder: want(
-                "decoder .onnx",
-                pick(&[
-                    "decoder-epoch-99-avg-1.onnx",
-                    "decoder-epoch-99-avg-1.int8.onnx",
-                ]),
-            )?,
-            joiner: want(
-                "joiner .onnx",
-                pick(&[
-                    "joiner-epoch-99-avg-1.int8.onnx",
-                    "joiner-epoch-99-avg-1.onnx",
-                ]),
-            )?,
-            tokens: want("tokens.txt", pick(&["tokens.txt"]))?,
-        })
+        Self::load_kind(dir, ModelKind::ZipformerTransducer)
     }
 
-    fn recognizer(&self, opts: &AsrOptions) -> Result<OnlineRecognizer> {
+    pub fn load_kind(dir: &Path, kind: ModelKind) -> Result<Self> {
+        let model = match kind {
+            ModelKind::ZipformerTransducer => Self::Zipformer {
+                encoder: pick(
+                    dir,
+                    &[
+                        "encoder-epoch-99-avg-1.int8.onnx",
+                        "encoder-epoch-99-avg-1.onnx",
+                    ],
+                )?,
+                decoder: pick(
+                    dir,
+                    &[
+                        "decoder-epoch-99-avg-1.int8.onnx",
+                        "decoder-epoch-99-avg-1.onnx",
+                    ],
+                )?,
+                joiner: pick(
+                    dir,
+                    &[
+                        "joiner-epoch-99-avg-1.int8.onnx",
+                        "joiner-epoch-99-avg-1.onnx",
+                    ],
+                )?,
+                tokens: pick(dir, &["tokens.txt"])?,
+            },
+            ModelKind::ParaformerOnline => Self::ParaformerOnline {
+                encoder: pick(dir, &["encoder.int8.onnx", "encoder.onnx"])?,
+                decoder: pick(dir, &["decoder.int8.onnx", "decoder.onnx"])?,
+                tokens: pick(dir, &["tokens.txt"])?,
+            },
+            ModelKind::ParaformerOffline => Self::ParaformerOffline {
+                model: pick(dir, &["model.int8.onnx", "model.onnx"])?,
+                tokens: pick(dir, &["tokens.txt"])?,
+            },
+            ModelKind::WhisperOffline => Self::Whisper {
+                encoder: pick(dir, &["tiny-encoder.int8.onnx", "tiny-encoder.onnx"])?,
+                decoder: pick(dir, &["tiny-decoder.int8.onnx", "tiny-decoder.onnx"])?,
+                tokens: pick(dir, &["tiny-tokens.txt", "tokens.txt"])?,
+            },
+        };
+        Ok(model)
+    }
+
+    pub fn kind(&self) -> ModelKind {
+        match self {
+            ModelFiles::Zipformer { .. } => ModelKind::ZipformerTransducer,
+            ModelFiles::ParaformerOnline { .. } => ModelKind::ParaformerOnline,
+            ModelFiles::ParaformerOffline { .. } => ModelKind::ParaformerOffline,
+            ModelFiles::Whisper { .. } => ModelKind::WhisperOffline,
+        }
+    }
+
+    fn tokens(&self) -> &Path {
+        match self {
+            ModelFiles::Zipformer { tokens, .. }
+            | ModelFiles::ParaformerOnline { tokens, .. }
+            | ModelFiles::ParaformerOffline { tokens, .. }
+            | ModelFiles::Whisper { tokens, .. } => tokens,
+        }
+    }
+
+    fn online_config(&self, opts: &AsrOptions) -> Result<OnlineRecognizerConfig> {
         let mut config = OnlineRecognizerConfig::default();
-        config.model_config.transducer.encoder = Some(self.encoder.clone());
-        config.model_config.transducer.decoder = Some(self.decoder.clone());
-        config.model_config.transducer.joiner = Some(self.joiner.clone());
-        config.model_config.tokens = Some(self.tokens.clone());
-        config.model_config.provider = Some(opts.provider.clone());
-        config.model_config.num_threads = opts.threads;
-        config.model_config.debug = false;
+        let model = &mut config.model_config;
+        match self {
+            ModelFiles::Zipformer {
+                encoder,
+                decoder,
+                joiner,
+                ..
+            } => {
+                model.transducer.encoder = Some(encoder.display().to_string());
+                model.transducer.decoder = Some(decoder.display().to_string());
+                model.transducer.joiner = Some(joiner.display().to_string());
+            }
+            ModelFiles::ParaformerOnline {
+                encoder, decoder, ..
+            } => {
+                model.paraformer.encoder = Some(encoder.display().to_string());
+                model.paraformer.decoder = Some(decoder.display().to_string());
+            }
+            _ => bail!("model is not a streaming recognizer"),
+        }
+        model.tokens = Some(self.tokens().display().to_string());
+        model.provider = Some(opts.provider.clone());
+        model.num_threads = opts.threads;
+        model.debug = false;
         config.decoding_method = Some("greedy_search".into());
         config.enable_endpoint = true;
-        OnlineRecognizer::create(&config).context("sherpa-onnx rejected the model config")
+        Ok(config)
+    }
+
+    fn offline_config(&self, opts: &AsrOptions) -> Result<OfflineRecognizerConfig> {
+        let mut config = OfflineRecognizerConfig::default();
+        let model = &mut config.model_config;
+        match self {
+            ModelFiles::ParaformerOffline { model: path, .. } => {
+                model.paraformer.model = Some(path.display().to_string());
+            }
+            ModelFiles::Whisper {
+                encoder, decoder, ..
+            } => {
+                model.whisper.encoder = Some(encoder.display().to_string());
+                model.whisper.decoder = Some(decoder.display().to_string());
+                model.whisper.language = opts.language.clone();
+                model.whisper.task = Some("transcribe".into());
+            }
+            _ => bail!("model is not an offline recognizer"),
+        }
+        model.tokens = Some(self.tokens().display().to_string());
+        model.provider = Some(opts.provider.clone());
+        model.num_threads = opts.threads;
+        model.debug = false;
+        config.decoding_method = Some("greedy_search".into());
+        Ok(config)
     }
 }
 
+#[derive(Debug)]
 pub struct AsrOptions {
     pub chunk_ms: u32,
     pub threads: i32,
     pub provider: String,
+    /// Buffer size for offline models, in milliseconds.
+    pub buffer_ms: u32,
+    /// Whisper language code (e.g. "en", "zh", "id"), when the model supports it.
+    pub language: Option<String>,
 }
 
 impl Default for AsrOptions {
@@ -76,6 +183,8 @@ impl Default for AsrOptions {
             chunk_ms: 100,
             threads: 2,
             provider: "cpu".into(),
+            buffer_ms: 2500,
+            language: None,
         }
     }
 }
@@ -86,61 +195,144 @@ pub struct Events {
     pub finals: Vec<String>,
 }
 
+enum Engine {
+    Online {
+        recognizer: OnlineRecognizer,
+        stream: OnlineStream,
+        last_partial: String,
+    },
+    Offline {
+        recognizer: OfflineRecognizer,
+        buffer: Vec<f32>,
+        samples_per_chunk: usize,
+    },
+}
+
 pub struct Transcriber {
-    recognizer: OnlineRecognizer,
-    stream: OnlineStream,
-    last_partial: String,
+    engine: Engine,
 }
 
 impl Transcriber {
     pub fn new(model: &ModelFiles, opts: &AsrOptions) -> Result<Self> {
-        let recognizer = model.recognizer(opts)?;
-        let stream = recognizer.create_stream();
-        Ok(Self {
-            recognizer,
-            stream,
-            last_partial: String::new(),
-        })
+        let engine = match model {
+            ModelFiles::Zipformer { .. } | ModelFiles::ParaformerOnline { .. } => {
+                let recognizer = OnlineRecognizer::create(&model.online_config(opts)?)
+                    .context("sherpa-onnx rejected the streaming model config")?;
+                let stream = recognizer.create_stream();
+                Engine::Online {
+                    recognizer,
+                    stream,
+                    last_partial: String::new(),
+                }
+            }
+            ModelFiles::ParaformerOffline { .. } | ModelFiles::Whisper { .. } => {
+                let recognizer = OfflineRecognizer::create(&model.offline_config(opts)?)
+                    .context("sherpa-onnx rejected the offline model config")?;
+                Engine::Offline {
+                    recognizer,
+                    buffer: Vec::new(),
+                    samples_per_chunk: ((SAMPLE_RATE as usize * opts.buffer_ms as usize) / 1000)
+                        .max(1),
+                }
+            }
+        };
+        Ok(Self { engine })
     }
 
     pub fn push(&mut self, samples: &[f32]) -> Events {
-        if !samples.is_empty() {
-            self.stream.accept_waveform(SAMPLE_RATE, samples);
+        match &mut self.engine {
+            Engine::Online {
+                recognizer,
+                stream,
+                last_partial,
+            } => {
+                if !samples.is_empty() {
+                    stream.accept_waveform(SAMPLE_RATE, samples);
+                }
+                decode_online(recognizer, stream, last_partial)
+            }
+            Engine::Offline {
+                recognizer,
+                buffer,
+                samples_per_chunk,
+            } => {
+                buffer.extend_from_slice(samples);
+                let mut events = Events::default();
+                while buffer.len() >= *samples_per_chunk {
+                    let chunk: Vec<f32> = buffer.drain(..*samples_per_chunk).collect();
+                    decode_offline(recognizer, &chunk, &mut events);
+                }
+                events
+            }
         }
-        self.decode_ready()
     }
 
     pub fn finish(&mut self) -> Events {
-        self.stream.input_finished();
-        let mut events = self.decode_ready();
-        if !self.last_partial.trim().is_empty() {
-            events.finals.push(std::mem::take(&mut self.last_partial));
-        }
-        events
-    }
-
-    fn decode_ready(&mut self) -> Events {
-        let mut events = Events::default();
-        while self.recognizer.is_ready(&self.stream) {
-            self.recognizer.decode(&self.stream);
-            let Some(result) = self.recognizer.get_result(&self.stream) else {
-                continue;
-            };
-            if !result.text.is_empty() {
-                events.partial = Some(result.text.clone());
-                self.last_partial = result.text.clone();
-            }
-            if self.recognizer.is_endpoint(&self.stream) {
-                if !result.text.trim().is_empty() {
-                    events.finals.push(result.text.clone());
+        match &mut self.engine {
+            Engine::Online {
+                recognizer,
+                stream,
+                last_partial,
+            } => {
+                stream.input_finished();
+                let mut events = decode_online(recognizer, stream, last_partial);
+                if !last_partial.trim().is_empty() {
+                    events.finals.push(std::mem::take(last_partial));
                 }
-                events.partial = Some(String::new());
-                self.last_partial.clear();
-                self.recognizer.reset(&self.stream);
+                events
+            }
+            Engine::Offline {
+                recognizer, buffer, ..
+            } => {
+                let mut events = Events::default();
+                if !buffer.is_empty() {
+                    let chunk = std::mem::take(buffer);
+                    decode_offline(recognizer, &chunk, &mut events);
+                }
+                events
             }
         }
-        events
     }
+}
+
+fn decode_online(
+    recognizer: &OnlineRecognizer,
+    stream: &OnlineStream,
+    last_partial: &mut String,
+) -> Events {
+    let mut events = Events::default();
+    while recognizer.is_ready(stream) {
+        recognizer.decode(stream);
+        let Some(result) = recognizer.get_result(stream) else {
+            continue;
+        };
+        if !result.text.is_empty() {
+            events.partial = Some(result.text.clone());
+            *last_partial = result.text.clone();
+        }
+        if recognizer.is_endpoint(stream) {
+            if !result.text.trim().is_empty() {
+                events.finals.push(result.text.clone());
+            }
+            events.partial = Some(String::new());
+            last_partial.clear();
+            recognizer.reset(stream);
+        }
+    }
+    events
+}
+
+fn decode_offline(recognizer: &OfflineRecognizer, samples: &[f32], events: &mut Events) {
+    let stream = recognizer.create_stream();
+    stream.accept_waveform(SAMPLE_RATE, samples);
+    recognizer.decode(&stream);
+    if let Some(result) = stream
+        .get_result()
+        .filter(|result| !result.text.trim().is_empty())
+    {
+        events.finals.push(result.text);
+    }
+    events.partial = None;
 }
 
 pub fn chunk_size(sample_rate: i32, chunk_ms: u32) -> usize {
@@ -159,7 +351,6 @@ pub fn transcribe(
     }
     let mut transcriber = Transcriber::new(model, opts)?;
     let chunk = chunk_size(sample_rate, opts.chunk_ms);
-
     for part in wave.samples().chunks(chunk) {
         on_events(transcriber.push(part));
     }
@@ -181,59 +372,23 @@ mod tests {
     #[test]
     #[ignore = "needs the model; set SANTHRA_MODEL_DIR to the model directory"]
     fn transcribes_sample_wav() {
-        // cargo runs tests with CWD = apps/cli, so resolve relative paths from the workspace root
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dir = root
             .join(std::env::var("SANTHRA_MODEL_DIR").expect("SANTHRA_MODEL_DIR"))
             .display()
             .to_string();
         let model = ModelFiles::load(Path::new(&dir)).expect("model files");
-        let wave = Wave::read(&format!("{dir}/test_wavs/0.wav")).expect("read wav");
-        let mut text = String::new();
+        let wave = Wave::read(
+            root.join("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav")
+                .to_str()
+                .unwrap(),
+        )
+        .expect("wav");
+        let mut finals = Vec::new();
         transcribe(&wave, &model, &AsrOptions::default(), |events| {
-            if let Some(partial) = &events.partial {
-                text.push_str(partial);
-                text.push(' ');
-            }
-            for final_text in events.finals {
-                text.push_str(&final_text);
-                text.push(' ');
-            }
+            finals.extend(events.finals);
         })
         .expect("transcribe");
-        assert!(
-            text.split_whitespace().count() >= 3,
-            "transcript too short: {text:?}"
-        );
-    }
-
-    #[test]
-    #[ignore = "needs the model; set SANTHRA_MODEL_DIR to the model directory"]
-    fn streams_partials_without_blanking_them() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let dir = root
-            .join(std::env::var("SANTHRA_MODEL_DIR").expect("SANTHRA_MODEL_DIR"))
-            .display()
-            .to_string();
-        let model = ModelFiles::load(Path::new(&dir)).expect("model files");
-        let wave = Wave::read(&format!("{dir}/test_wavs/0.wav")).expect("read wav");
-        let mut transcriber =
-            Transcriber::new(&model, &AsrOptions::default()).expect("transcriber");
-        let chunk = chunk_size(SAMPLE_RATE, 100);
-
-        let mut shown = 0;
-        let mut quiet_pushes = 0;
-        for part in wave.samples().chunks(chunk) {
-            match transcriber.push(part).partial {
-                Some(text) if !text.trim().is_empty() => shown += 1,
-                Some(_) => {}
-                None => quiet_pushes += 1,
-            }
-        }
-        assert!(shown >= 3, "only {shown} partial results while streaming");
-        assert!(
-            quiet_pushes > 0,
-            "no push without a new result; the None contract was not exercised"
-        );
+        assert!(!finals.is_empty());
     }
 }

@@ -26,6 +26,10 @@ pub struct Settings {
     pub threads: i32,
     pub max_lines: usize,
     pub show_partial: bool,
+    pub language: Option<String>,
+    pub model_id: Option<String>,
+    pub model_kind: Option<String>,
+    pub buffer_ms: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
     pub font_size: f32,
@@ -47,6 +51,10 @@ impl Default for Settings {
         Self {
             target: None,
             model_dir: DEFAULT_MODEL_DIR.into(),
+            language: Some("english".into()),
+            model_id: Some("zipformer-en-20m".into()),
+            model_kind: Some("zipformer".into()),
+            buffer_ms: 2500,
             threads: 2,
             max_lines: 2,
             show_partial: true,
@@ -100,9 +108,33 @@ impl Settings {
     }
 
     pub fn session_options(&self) -> app_core::SessionOptions {
+        let selected = self.model_id.as_deref().and_then(santhra_models::entry);
+        let model_dir = selected
+            .map(|entry| {
+                santhra_models::model_dir(entry.id)
+                    .unwrap_or_else(|_| PathBuf::from(&self.model_dir))
+            })
+            .unwrap_or_else(|| PathBuf::from(&self.model_dir));
+        let model_kind = selected
+            .map(|entry| entry.kind.as_str().to_owned())
+            .or_else(|| self.model_kind.clone())
+            .unwrap_or_else(|| "zipformer".into());
+        let language = self
+            .language
+            .as_deref()
+            .and_then(santhra_models::Language::parse);
+        let whisper_language = match language {
+            Some(santhra_models::Language::English) => Some("en".into()),
+            Some(santhra_models::Language::Chinese) => Some("zh".into()),
+            Some(santhra_models::Language::Indonesia) => Some("id".into()),
+            Some(santhra_models::Language::Multilingual) | None => None,
+        };
         app_core::SessionOptions {
             target: self.target.clone(),
-            model_dir: PathBuf::from(&self.model_dir),
+            model_dir,
+            model_kind,
+            buffer_ms: self.buffer_ms,
+            language: whisper_language,
             threads: self.threads,
             provider: "cpu".into(),
             max_lines: self.max_lines,

@@ -6,6 +6,8 @@ members = [
     "crates/audio-linux",
     "crates/caption-core",
     "crates/speech-sherpa",
+    "crates/santhra-models",
+    "crates/santhra-download",
 ]
 resolver = "3"
 

@@ -11,3 +11,5 @@ anyhow = "1"
 app-core = { path = "../../crates/app-core" }
 caption-core = { path = "../../crates/caption-core" }
 speech-sherpa = { path = "../../crates/speech-sherpa" }
+santhra-models = { path = "../../crates/santhra-models" }
+santhra-download = { path = "../../crates/santhra-download" }

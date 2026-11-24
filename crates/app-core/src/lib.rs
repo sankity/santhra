@@ -5,12 +5,15 @@ use std::thread::JoinHandle;
 
 use anyhow::Result;
 use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
-use speech_sherpa::{AsrOptions, ModelFiles, Transcriber};
+use speech_sherpa::{AsrOptions, ModelFiles, ModelKind, Transcriber};
 
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
     pub target: Option<String>,
     pub model_dir: PathBuf,
+    pub model_kind: String,
+    pub buffer_ms: u32,
+    pub language: Option<String>,
     pub threads: i32,
     pub provider: String,
     pub max_lines: usize,
@@ -43,8 +46,12 @@ impl Session {
                     chunk_ms: 100,
                     threads: opts.threads,
                     provider: opts.provider.clone(),
+                    buffer_ms: opts.buffer_ms,
+                    language: opts.language.clone(),
                 };
-                let model = match ModelFiles::load(&opts.model_dir) {
+                let kind =
+                    ModelKind::parse(&opts.model_kind).unwrap_or(ModelKind::ZipformerTransducer);
+                let model = match ModelFiles::load_kind(&opts.model_dir, kind) {
                     Ok(model) => model,
                     Err(err) => {
                         let _ = tx.send(Message::Failed(format!("{err:#}")));

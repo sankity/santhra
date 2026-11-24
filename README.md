@@ -46,7 +46,22 @@ cargo run -p santhra-cli -- transcribe path/to/file.wav  # transcribe a 16 kHz m
 ```
 
 Useful flags: `--no-partial` (final segments only), `--max-lines <n>`, `--model-dir <path>`,
-`--threads <n>`.
+`--threads <n>`, `--language <lang>`, `--model <id>`, `--buffer-ms <n>`.
+
+Bundled models can be listed, downloaded and verified from the CLI:
+
+```bash
+santhra-cli models list [--language english|chinese|indonesia|multilingual]
+santhra-cli models download <id>
+santhra-cli models verify <id>
+```
+
+Downloads come from official sherpa-onnx Hugging Face repositories into
+`~/.local/share/santhra/models/<id>/` and are checked against SHA256 + size from the bundled
+manifest. The same manager is available in the desktop app under Settings → Model, where you can
+pick a language and model, watch progress, and cancel a download. Offline models buffer about
+2.5 s and do not show partial captions. Model licences and source repositories are listed in
+Settings → About.
 
 Desktop app:
 
