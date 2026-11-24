@@ -109,6 +109,14 @@ pub fn leaked_family(name: &str) -> &'static str {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsTab {
+    Session,
+    Captions,
+    Overlay,
+    About,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Main,
     Settings,
@@ -123,6 +131,7 @@ pub enum Picker {
 pub struct State {
     pub id: &'static str,
     pub screen: Screen,
+    pub tab: SettingsTab,
     pub picker: Option<Picker>,
     pub seen: usize,
     pub session: Option<Session>,
@@ -138,6 +147,7 @@ impl State {
         State {
             id,
             screen: Screen::Main,
+            tab: SettingsTab::Session,
             picker: None,
             seen: 0,
             session: None,
@@ -437,6 +447,7 @@ pub fn scene_settings(s: &mut State) {
 /// Headless tooling scene: open the Font dropdown inside the Settings layer.
 pub fn scene_font_picker(s: &mut State) {
     s.screen = Screen::Settings;
+    s.tab = SettingsTab::Captions;
     s.picker = Some(Picker::Font);
 }
 
@@ -444,4 +455,20 @@ pub fn scene_font_picker(s: &mut State) {
 pub fn scene_source_picker(s: &mut State) {
     s.screen = Screen::Settings;
     s.picker = Some(Picker::Source);
+}
+
+/// Headless tooling scenes: one per Settings tab.
+pub fn scene_settings_captions(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::Captions;
+}
+
+pub fn scene_settings_overlay(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::Overlay;
+}
+
+pub fn scene_settings_about(s: &mut State) {
+    s.screen = Screen::Settings;
+    s.tab = SettingsTab::About;
 }

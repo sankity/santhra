@@ -34,6 +34,9 @@ fn main_spec() -> AppSpec<State> {
             ("settings", app::scene_settings),
             ("font-picker", app::scene_font_picker),
             ("source-picker", app::scene_source_picker),
+            ("settings-captions", app::scene_settings_captions),
+            ("settings-overlay", app::scene_settings_overlay),
+            ("settings-about", app::scene_settings_about),
         ],
         ..AppSpec::new(
             "Santhra",
