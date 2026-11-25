@@ -1,5 +1,7 @@
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use app_core::{Message, Session, SessionOptions};
@@ -10,8 +12,9 @@ use santhra_models::{
     ModelKind as CatalogKind, default_for_id, entry, model_dir, models_root, speech_language,
     whisper_language_code,
 };
+use serde_json::{Value, json};
 use sherpa_onnx::Wave;
-use speech_sherpa::{AsrOptions, ModelFiles, ModelKind};
+use speech_sherpa::{AsrOptions, ModelFiles, ModelKind, Transcriber};
 
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
 
@@ -37,6 +40,21 @@ enum Command {
         #[command(flatten)]
         common: Common,
     },
+    /// Transcribe a manifest of WAV files with one model load (JSONL output).
+    TranscribeBatch {
+        #[command(flatten)]
+        common: Common,
+        #[arg(long, help = "Dataset manifest with samples[].audio_path")]
+        manifest: PathBuf,
+        #[arg(long, help = "Write JSONL to this file instead of stdout")]
+        output: Option<PathBuf>,
+        #[arg(
+            long,
+            default_value_t = 600,
+            help = "Batch wall-clock timeout in seconds; 0 disables it"
+        )]
+        timeout: u64,
+    },
     Live {
         #[arg(
             long,
@@ -53,6 +71,8 @@ enum ModelsCommand {
     List {
         #[arg(long)]
         language: Option<String>,
+        #[arg(long, help = "Machine-readable output for the evaluation harness")]
+        json: bool,
     },
     Download {
         id: String,
@@ -231,6 +251,252 @@ fn transcribe_wav(wav: PathBuf, common: Common) -> Result<()> {
     })
 }
 
+fn millis(start: Instant) -> f64 {
+    (start.elapsed().as_secs_f64() * 1_000_000.0).round() / 1000.0
+}
+
+fn peak_rss_kb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let rest = line.strip_prefix("VmHWM:")?;
+        rest.split_whitespace().next()?.parse().ok()
+    })
+}
+
+fn emit(sink: &mut dyn Write, value: &Value) -> Result<()> {
+    writeln!(sink, "{}", serde_json::to_string(value)?)?;
+    sink.flush()?;
+    Ok(())
+}
+
+struct SampleOutcome {
+    status: &'static str,
+    finals: Vec<String>,
+    elapsed_ms: Option<f64>,
+    partial_count: u64,
+    first_partial_ms: Option<f64>,
+    final_caption_ms: Option<f64>,
+    error: Option<String>,
+}
+
+impl SampleOutcome {
+    fn failed(status: &'static str, error: String) -> Self {
+        Self {
+            status,
+            finals: Vec::new(),
+            elapsed_ms: None,
+            partial_count: 0,
+            first_partial_ms: None,
+            final_caption_ms: None,
+            error: Some(error),
+        }
+    }
+}
+
+fn run_sample(transcriber: &mut Transcriber, opts: &AsrOptions, path: &Path) -> SampleOutcome {
+    let wave = match Wave::read(&path.display().to_string()) {
+        Some(wave) => wave,
+        None => {
+            return SampleOutcome::failed(
+                "audio_error",
+                format!("cannot read WAV: {}", path.display()),
+            );
+        }
+    };
+    if wave.sample_rate() != speech_sherpa::SAMPLE_RATE {
+        return SampleOutcome::failed(
+            "audio_error",
+            format!(
+                "expected {} Hz audio, got {} Hz",
+                speech_sherpa::SAMPLE_RATE,
+                wave.sample_rate()
+            ),
+        );
+    }
+
+    let start = Instant::now();
+    let mut outcome = SampleOutcome {
+        status: "success",
+        finals: Vec::new(),
+        elapsed_ms: None,
+        partial_count: 0,
+        first_partial_ms: None,
+        final_caption_ms: None,
+        error: None,
+    };
+    let result = speech_sherpa::transcribe_with(transcriber, &wave, opts, |events| {
+        if events
+            .partial
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+        {
+            outcome.partial_count += 1;
+            if outcome.first_partial_ms.is_none() {
+                outcome.first_partial_ms = Some(millis(start));
+            }
+        }
+        for text in events.finals {
+            outcome.final_caption_ms = Some(millis(start));
+            outcome.finals.push(text);
+        }
+    });
+    outcome.elapsed_ms = Some(millis(start));
+    if let Err(error) = result {
+        outcome.status = "model_error";
+        outcome.error = Some(format!("{error:#}"));
+    } else if outcome.finals.iter().all(|text| text.trim().is_empty()) {
+        outcome.status = "empty_transcript";
+    }
+    outcome
+}
+
+fn transcribe_batch(
+    common: Common,
+    manifest: PathBuf,
+    output: Option<PathBuf>,
+    timeout: u64,
+) -> Result<()> {
+    let batch_start = Instant::now();
+    let deadline = (timeout > 0).then(|| batch_start + Duration::from_secs(timeout));
+    let selected = common.selected()?;
+    let model_start = Instant::now();
+    let model = ModelFiles::load_kind(&common.model_dir()?, common.model_kind())?;
+    let opts = common.options();
+    let mut transcriber = Transcriber::new(&model, &opts)?;
+    let load_ms = millis(model_start);
+
+    let text = std::fs::read_to_string(&manifest)
+        .with_context(|| format!("cannot read manifest {}", manifest.display()))?;
+    let document: Value = serde_json::from_str(&text)
+        .with_context(|| format!("cannot parse manifest {}", manifest.display()))?;
+    let samples = document
+        .get("samples")
+        .and_then(Value::as_array)
+        .context("manifest has no samples array")?;
+    let manifest_dir = manifest.parent().unwrap_or_else(|| Path::new("."));
+
+    let model_files: Vec<Value> = selected
+        .map(|item| {
+            item.files
+                .iter()
+                .map(|file| json!({"name": file.name, "sha256": file.sha256, "bytes": file.bytes}))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut sink: Box<dyn Write> = match &output {
+        Some(path) => {
+            Box::new(BufWriter::new(File::create(path).with_context(|| {
+                format!("cannot create output file {}", path.display())
+            })?))
+        }
+        None => Box::new(BufWriter::new(io::stdout())),
+    };
+
+    emit(
+        &mut sink,
+        &json!({
+            "type": "meta",
+            "model_id": selected.map(|item| item.id).unwrap_or("custom"),
+            "language": common.language,
+            "kind": common.model_kind().as_str(),
+            "load_ms": load_ms,
+            "sample_count": samples.len(),
+            "model_files": model_files,
+            "asr": {
+                "chunk_ms": opts.chunk_ms,
+                "threads": opts.threads,
+                "provider": opts.provider.clone(),
+                "buffer_ms": opts.buffer_ms,
+                "whisper_language": opts.language.clone(),
+            },
+        }),
+    )?;
+
+    let mut success = 0u64;
+    let mut empty = 0u64;
+    let mut failed = 0u64;
+    let mut timed_out = 0u64;
+    for (index, sample) in samples.iter().enumerate() {
+        let id = sample
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            timed_out += 1;
+            emit(
+                &mut sink,
+                &json!({
+                    "type": "sample",
+                    "index": index,
+                    "id": id,
+                    "status": "timeout",
+                    "finals": [],
+                    "elapsed_ms": Value::Null,
+                    "partial_count": 0,
+                    "first_partial_ms": Value::Null,
+                    "final_caption_ms": Value::Null,
+                    "error": format!("batch timeout after {timeout}s"),
+                }),
+            )?;
+            continue;
+        }
+
+        let audio = sample
+            .get("audio_path")
+            .or_else(|| sample.get("wav"))
+            .and_then(Value::as_str);
+        let outcome = match audio {
+            Some(audio) => {
+                let path = PathBuf::from(audio);
+                let path = if path.is_absolute() {
+                    path
+                } else {
+                    manifest_dir.join(path)
+                };
+                run_sample(&mut transcriber, &opts, &path)
+            }
+            None => SampleOutcome::failed("audio_error", "sample has no audio_path".into()),
+        };
+        match outcome.status {
+            "success" => success += 1,
+            "empty_transcript" => empty += 1,
+            _ => failed += 1,
+        }
+        emit(
+            &mut sink,
+            &json!({
+                "type": "sample",
+                "index": index,
+                "id": id,
+                "status": outcome.status,
+                "finals": outcome.finals,
+                "elapsed_ms": outcome.elapsed_ms,
+                "partial_count": outcome.partial_count,
+                "first_partial_ms": outcome.first_partial_ms,
+                "final_caption_ms": outcome.final_caption_ms,
+                "error": outcome.error,
+            }),
+        )?;
+    }
+
+    emit(
+        &mut sink,
+        &json!({
+            "type": "summary",
+            "attempted": samples.len(),
+            "success": success,
+            "empty_transcript": empty,
+            "failed": failed,
+            "timeout": timed_out,
+            "peak_rss_kb": peak_rss_kb(),
+            "total_elapsed_ms": millis(batch_start),
+        }),
+    )?;
+    Ok(())
+}
+
 fn live(target: Option<String>, common: Common) -> Result<()> {
     let session = Session::start(common.session_options(target)?)?;
     let mut printer = Printer::default();
@@ -252,7 +518,7 @@ fn live(target: Option<String>, common: Common) -> Result<()> {
 fn models_command(action: ModelsCommand) -> Result<()> {
     match action {
         ModelsCommand::Root => println!("{}", models_root().display()),
-        ModelsCommand::List { language } => {
+        ModelsCommand::List { language, json } => {
             let filter = language
                 .as_deref()
                 .map(|id| {
@@ -261,6 +527,36 @@ fn models_command(action: ModelsCommand) -> Result<()> {
                         .with_context(|| format!("unknown language id: {id}"))
                 })
                 .transpose()?;
+            if json {
+                let default_id = filter.and_then(default_for_id).map(|item| item.id);
+                let mut items = Vec::new();
+                for item in santhra_models::catalog() {
+                    if filter.is_some_and(|id| !santhra_models::matches_language_id(item, id)) {
+                        continue;
+                    }
+                    let installed = model_dir(item.id)
+                        .map(|dir| santhra_models::resolve(item, &dir).is_ok())
+                        .unwrap_or(false);
+                    items.push(json!({
+                        "id": item.id,
+                        "label": item.label,
+                        "language": item.language.as_str(),
+                        "kind": item.kind.as_str(),
+                        "license": item.license,
+                        "source": item.source,
+                        "installed": installed,
+                        "default": default_id == Some(item.id),
+                        "bytes": item.total_bytes(),
+                        "files": item.files.iter().map(|file| json!({
+                            "name": file.name,
+                            "sha256": file.sha256,
+                            "bytes": file.bytes,
+                        })).collect::<Vec<_>>(),
+                    }));
+                }
+                println!("{}", serde_json::to_string_pretty(&items)?);
+                return Ok(());
+            }
             for item in santhra_models::catalog() {
                 if filter.is_some_and(|id| !santhra_models::matches_language_id(item, id)) {
                     continue;
@@ -307,6 +603,12 @@ fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Models { action } => models_command(action),
         Command::Transcribe { wav, common } => transcribe_wav(wav, common),
+        Command::TranscribeBatch {
+            common,
+            manifest,
+            output,
+            timeout,
+        } => transcribe_batch(common, manifest, output, timeout),
         Command::Live { target, common } => live(target, common),
     }
 }

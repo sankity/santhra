@@ -94,37 +94,28 @@ edge-resize is not available. `docs/overlay-support.md` has the full capability 
 
 ```bash
 cargo test --all
+bash scripts/test-eval.sh     # level 0 + 1 ASR checks (no network; level 1 needs a local model)
 bash scripts/live-smoke.sh    # plays a sample WAV through the default sink and checks the caption
 ```
 
-Model-backed tests are ignored by default. To run one batch across all languages with verified
-FLEURS references and all catalog models compatible with each language, build the CLI and run one
-evaluation command:
+ASR evaluation is documented in `docs/evaluation.md`. In short:
 
 ```bash
 cargo build -p santhra-cli
-python3 scripts/test-asr-language.py --all-languages --all-models --samples 3 \
-  --yes-download-large --download-missing-models
+python3 scripts/test-asr-language.py smoke --language english --samples 3
+python3 scripts/test-asr-language.py compare --latest
+python3 -m unittest scripts/test_asr_eval.py
 ```
 
-The runner prints `CORRECT`/`INCORRECT` for each utterance and a model comparison ranked by CER
-(lower is better). All 10 enabled languages have verified FLEURS references. This full batch is a large job:
-`--download-missing-models` downloads compatible models that are not installed, and
-`--yes-download-large` allows downloading the FLEURS test archives. Both require time, network, and
-disk space. After the first run, cached audio and installed models are reused. Remove
-`--download-missing-models` to test only installed models. Use `--samples N` to choose how many
-utterances per language; `--model <id>` instead of `--all-models` tests one model for one language.
-A `CORRECT` match ignores case, punctuation, and whitespace differences; FLEURS is read speech, not
-songs, so it does not measure lyric recognition. The supported language list is intentionally limited
-to English, Mandarin Chinese, Spanish, Hindi, Indonesian, French, German, Japanese, Portuguese, and
-Russian; each has an explicit FLEURS test mapping.
+Stages are `smoke`, `screening`, `accuracy`, `streaming`, and `compare`; results go to
+`evaluation/runs/<run-id>/`. Model and dataset downloads are always opt-in
+(`--download-missing-models`, `--yes-download-large`).
 
-The earlier model-backed loader/inference tests can also be run with:
-
-```bash
-SANTHRA_MODEL_DIR=models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17 \
-  cargo test -p speech-sherpa -- --ignored
-```
+A `CORRECT` match ignores case, punctuation, and whitespace differences. FLEURS is read
+speech, not songs, so it does not measure lyric recognition. The supported language list
+is intentionally limited to English, Mandarin Chinese, Spanish, Hindi, Indonesian,
+French, German, Japanese, Portuguese, and Russian; each has an explicit FLEURS test
+mapping and only compatible catalog models are tested.
 
 ## Documentation
 

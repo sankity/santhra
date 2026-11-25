@@ -296,6 +296,21 @@ impl Transcriber {
         Ok(Self { engine })
     }
 
+    /// Clear per-utterance state without reloading the model.
+    fn reset(&mut self) {
+        match &mut self.engine {
+            Engine::Online {
+                recognizer,
+                stream,
+                last_partial,
+            } => {
+                *stream = recognizer.create_stream();
+                last_partial.clear();
+            }
+            Engine::Offline { buffer, .. } => buffer.clear(),
+        }
+    }
+
     pub fn push(&mut self, samples: &[f32]) -> Events {
         match &mut self.engine {
             Engine::Online {
@@ -400,13 +415,27 @@ pub fn transcribe(
     wave: &Wave,
     model: &ModelFiles,
     opts: &AsrOptions,
+    on_events: impl FnMut(Events),
+) -> Result<()> {
+    let mut transcriber = Transcriber::new(model, opts)?;
+    transcribe_with(&mut transcriber, wave, opts, on_events)
+}
+
+/// Feed one wave through an already-loaded transcriber.
+///
+/// Evaluators call this once per sample to keep the recognizer (and therefore the model)
+/// loaded across a batch. `transcribe` is the single-shot wrapper used by the CLI.
+pub fn transcribe_with(
+    transcriber: &mut Transcriber,
+    wave: &Wave,
+    opts: &AsrOptions,
     mut on_events: impl FnMut(Events),
 ) -> Result<()> {
     let sample_rate = wave.sample_rate();
     if sample_rate != SAMPLE_RATE {
         bail!("expected 16 kHz mono WAV, got {sample_rate} Hz (resampling is not implemented yet)");
     }
-    let mut transcriber = Transcriber::new(model, opts)?;
+    transcriber.reset();
     let chunk = chunk_size(sample_rate, opts.chunk_ms);
     for part in wave.samples().chunks(chunk) {
         on_events(transcriber.push(part));
@@ -464,28 +493,5 @@ mod tests {
         assert_eq!(chunk_size(16000, 100), 1600);
         assert_eq!(chunk_size(8000, 100), 800);
         assert_eq!(chunk_size(16000, 0), 1);
-    }
-
-    #[test]
-    #[ignore = "needs the model; set SANTHRA_MODEL_DIR to the model directory"]
-    fn transcribes_sample_wav() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let dir = root
-            .join(std::env::var("SANTHRA_MODEL_DIR").expect("SANTHRA_MODEL_DIR"))
-            .display()
-            .to_string();
-        let model = ModelFiles::load(Path::new(&dir)).expect("model files");
-        let wave = Wave::read(
-            root.join("models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/test_wavs/0.wav")
-                .to_str()
-                .unwrap(),
-        )
-        .expect("wav");
-        let mut finals = Vec::new();
-        transcribe(&wave, &model, &AsrOptions::default(), |events| {
-            finals.extend(events.finals);
-        })
-        .expect("transcribe");
-        assert!(!finals.is_empty());
     }
 }

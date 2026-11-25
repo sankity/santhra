@@ -3602,6 +3602,7 @@ dependencies = [
  "clap",
  "santhra-download",
  "santhra-models",
+ "serde_json",
  "sherpa-onnx",
  "speech-sherpa",
 ]
