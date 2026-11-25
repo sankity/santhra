@@ -11,7 +11,7 @@ use rune::{
 };
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ComboboxEvent, ComboboxState, Kit, Sidebar,
-    SidebarRow, SidebarSection, Switch, glyphs, root,
+    SidebarRow, SidebarSection, Switch, Toolbar, glyphs, root,
 };
 use speech_sherpa::ModelKind;
 
@@ -352,29 +352,44 @@ pub fn view_main(s: &State, _cx: &mut Cx<State>) -> El {
         Section::About => crate::settings_view::about_body(&kit),
     };
 
-    let body = row()
+    let body = col()
         .key("main")
         .w_full()
         .h_full()
         .fill(t.bg)
-        .child(sidebar(s, &kit, &settings, running, model_ok, dot))
-        .child(el().w(1.0).h_full().fill(t.separator))
+        .child(header(s, &kit, &t, dot))
+        .child(el().w_full().h(1.0).fill(t.separator))
         .child(
-            col()
-                .key("content")
+            row()
                 .grow(1.0)
-                .min_w(0.0)
-                .h_full()
+                .w_full()
+                .min_h(0.0)
+                .child(sidebar(s, &kit, &settings, running, model_ok))
+                .child(el().w(1.0).h_full().fill(t.separator))
                 .child(
-                    row().w_full().px(24.0).pt(20.0).pb(4.0).child(
-                        text(section_title(s.section))
-                            .font(type_::TITLE)
-                            .color(t.text),
-                    ),
-                )
-                .child(content),
+                    col()
+                        .key("content")
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .h_full()
+                        .pt(20.0)
+                        .child(content),
+                ),
         );
     root(body, overlays)
+}
+
+fn header(s: &State, kit: &Kit, t: &tok::Theme, dot: Color) -> El {
+    let status = row()
+        .gap(8.0)
+        .center_y()
+        .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
+        .child(text(&s.status).font(type_::LABEL).color(t.text_secondary));
+    Toolbar::new()
+        .leading(text("Santhra").font(type_::TITLE).color(t.text))
+        .title(section_title(s.section))
+        .trailing(status)
+        .build(kit)
 }
 
 fn section_title(section: Section) -> &'static str {
@@ -411,26 +426,11 @@ fn status_dot(running: bool, failed: bool) -> Color {
     }
 }
 
-fn sidebar(
-    s: &State,
-    kit: &Kit,
-    settings: &Settings,
-    running: bool,
-    model_ok: bool,
-    dot: Color,
-) -> El {
+fn sidebar(s: &State, kit: &Kit, settings: &Settings, running: bool, model_ok: bool) -> El {
     let t = tok::theme(true);
     let header = col()
         .w_full()
         .gap(10.0)
-        .child(text("Santhra").font(type_::TITLE).color(t.text))
-        .child(
-            row()
-                .gap(8.0)
-                .center_y()
-                .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
-                .child(text(&s.status).font(type_::LABEL).color(t.text_secondary)),
-        )
         .child(
             row()
                 .gap(8.0)
