@@ -41,6 +41,60 @@ fn pick(dir: &Path, names: &[&str]) -> Result<PathBuf> {
         .with_context(|| format!("missing {} in {}", names.join(" / "), dir.display()))
 }
 
+fn pick_prefixed(dir: &Path, names: &[&str], prefix: &str) -> Result<PathBuf> {
+    if let Ok(path) = pick(dir, names) {
+        return Ok(path);
+    }
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("read model directory {}", dir.display()))?
+        .filter_map(|item| item.ok())
+        .map(|item| item.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".onnx"))
+        })
+        .collect();
+    candidates.sort_by_key(|path| {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        (!name.ends_with(".int8.onnx"), name.to_owned())
+    });
+    candidates
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing {}*.onnx in {}", prefix, dir.display()))
+}
+
+fn pick_suffix(dir: &Path, suffix: &str) -> Result<PathBuf> {
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("read model directory {}", dir.display()))?
+        .filter_map(|item| item.ok())
+        .map(|item| item.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(suffix))
+        })
+        .collect();
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .with_context(|| format!("missing *{suffix} in {}", dir.display()))
+}
+
+fn pick_whisper_component(dir: &Path, component: &str) -> Result<PathBuf> {
+    pick_suffix(dir, &format!("-{component}.int8.onnx"))
+        .or_else(|_| pick_suffix(dir, &format!("-{component}.onnx")))
+}
+
 impl ModelFiles {
     /// Backwards-compatible loader for the existing Zipformer layout.
     pub fn load(dir: &Path) -> Result<Self> {
@@ -50,26 +104,29 @@ impl ModelFiles {
     pub fn load_kind(dir: &Path, kind: ModelKind) -> Result<Self> {
         let model = match kind {
             ModelKind::ZipformerTransducer => Self::Zipformer {
-                encoder: pick(
+                encoder: pick_prefixed(
                     dir,
                     &[
                         "encoder-epoch-99-avg-1.int8.onnx",
                         "encoder-epoch-99-avg-1.onnx",
                     ],
+                    "encoder-",
                 )?,
-                decoder: pick(
+                decoder: pick_prefixed(
                     dir,
                     &[
                         "decoder-epoch-99-avg-1.int8.onnx",
                         "decoder-epoch-99-avg-1.onnx",
                     ],
+                    "decoder-",
                 )?,
-                joiner: pick(
+                joiner: pick_prefixed(
                     dir,
                     &[
                         "joiner-epoch-99-avg-1.int8.onnx",
                         "joiner-epoch-99-avg-1.onnx",
                     ],
+                    "joiner-",
                 )?,
                 tokens: pick(dir, &["tokens.txt"])?,
             },
@@ -83,9 +140,9 @@ impl ModelFiles {
                 tokens: pick(dir, &["tokens.txt"])?,
             },
             ModelKind::WhisperOffline => Self::Whisper {
-                encoder: pick(dir, &["tiny-encoder.int8.onnx", "tiny-encoder.onnx"])?,
-                decoder: pick(dir, &["tiny-decoder.int8.onnx", "tiny-decoder.onnx"])?,
-                tokens: pick(dir, &["tiny-tokens.txt", "tokens.txt"])?,
+                encoder: pick_whisper_component(dir, "encoder")?,
+                decoder: pick_whisper_component(dir, "decoder")?,
+                tokens: pick_suffix(dir, "-tokens.txt").or_else(|_| pick(dir, &["tokens.txt"]))?,
             },
         };
         Ok(model)
@@ -361,6 +418,46 @@ pub fn transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zipformer_loader_accepts_versioned_file_names() {
+        let dir = std::env::temp_dir().join(format!("santhra-model-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("model dir");
+        for name in [
+            "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
+            "decoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
+            "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
+            "tokens.txt",
+        ] {
+            std::fs::write(dir.join(name), []).expect("create model file");
+        }
+        let model =
+            ModelFiles::load_kind(&dir, ModelKind::ZipformerTransducer).expect("load model");
+        assert_eq!(model.kind(), ModelKind::ZipformerTransducer);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn whisper_loader_accepts_size_specific_file_names() {
+        for size in ["base", "small"] {
+            let dir =
+                std::env::temp_dir().join(format!("santhra-whisper-{size}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("model dir");
+            for name in [
+                format!("{size}-encoder.int8.onnx"),
+                format!("{size}-decoder.int8.onnx"),
+                format!("{size}-tokens.txt"),
+            ] {
+                std::fs::write(dir.join(name), []).expect("create model file");
+            }
+            let model =
+                ModelFiles::load_kind(&dir, ModelKind::WhisperOffline).expect("load Whisper model");
+            assert_eq!(model.kind(), ModelKind::WhisperOffline);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 
     #[test]
     fn chunk_size_math() {

@@ -119,16 +119,11 @@ impl Settings {
             .map(|entry| entry.kind.as_str().to_owned())
             .or_else(|| self.model_kind.clone())
             .unwrap_or_else(|| "zipformer".into());
-        let language = self
+        let whisper_language = self
             .language
             .as_deref()
-            .and_then(santhra_models::Language::parse);
-        let whisper_language = match language {
-            Some(santhra_models::Language::English) => Some("en".into()),
-            Some(santhra_models::Language::Chinese) => Some("zh".into()),
-            Some(santhra_models::Language::Indonesia) => Some("id".into()),
-            Some(santhra_models::Language::Multilingual) | None => None,
-        };
+            .and_then(santhra_models::whisper_language_code)
+            .map(str::to_owned);
         app_core::SessionOptions {
             target: self.target.clone(),
             model_dir,
@@ -201,6 +196,21 @@ mod tests {
         settings.save_to(&path).expect("save defaults");
         assert_eq!(Settings::load_from(&path), settings);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_options_use_selected_whisper_language_code() {
+        let mut settings = Settings::default();
+        settings.language = Some("french".into());
+        settings.model_id = Some("whisper-tiny-multilingual".into());
+        let options = settings.session_options();
+        assert_eq!(options.language.as_deref(), Some("fr"));
+
+        settings.language = Some("indonesia".into());
+        assert_eq!(settings.session_options().language.as_deref(), Some("id"));
+
+        settings.language = Some("multilingual".into());
+        assert_eq!(settings.session_options().language, None);
     }
 
     #[test]

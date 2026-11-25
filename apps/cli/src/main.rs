@@ -7,7 +7,8 @@ use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
 use clap::{Args, Parser, Subcommand};
 use santhra_download::{Progress, download_all};
 use santhra_models::{
-    Language, ModelKind as CatalogKind, default_for, entry, for_language, model_dir, models_root,
+    ModelKind as CatalogKind, default_for_id, entry, model_dir, models_root, speech_language,
+    whisper_language_code,
 };
 use sherpa_onnx::Wave;
 use speech_sherpa::{AsrOptions, ModelFiles, ModelKind};
@@ -76,7 +77,10 @@ struct Common {
     #[arg(long, default_value = "cpu")]
     provider: String,
 
-    #[arg(long, help = "Language: english, chinese, indonesia or multilingual")]
+    #[arg(
+        long,
+        help = "Speech language id from the multilingual ASR language list"
+    )]
     language: Option<String>,
 
     #[arg(
@@ -104,17 +108,25 @@ struct Common {
 }
 
 impl Common {
-    fn language(&self) -> Option<Language> {
-        self.language.as_deref().and_then(Language::parse)
-    }
-
     fn selected(&self) -> Result<Option<&'static santhra_models::ModelEntry>> {
-        if let Some(id) = &self.model {
-            return entry(id)
-                .map(Some)
-                .with_context(|| format!("unknown model id: {id}"));
+        if let Some(id) = self.language.as_deref()
+            && speech_language(id).is_none()
+        {
+            bail!("unknown language id: {id}");
         }
-        Ok(self.language().map(default_for))
+        if let Some(id) = &self.model {
+            let selected = entry(id).with_context(|| format!("unknown model id: {id}"))?;
+            if let Some(language) = self.language.as_deref()
+                && !santhra_models::matches_language_id(selected, language)
+            {
+                bail!("model {id} does not support language {language}");
+            }
+            return Ok(Some(selected));
+        }
+        self.language
+            .as_deref()
+            .map(|id| default_for_id(id).with_context(|| format!("unknown language id: {id}")))
+            .transpose()
     }
 
     fn model_dir(&self) -> Result<PathBuf> {
@@ -137,12 +149,10 @@ impl Common {
     }
 
     fn whisper_language(&self) -> Option<String> {
-        match self.language() {
-            Some(Language::English) => Some("en".into()),
-            Some(Language::Chinese) => Some("zh".into()),
-            Some(Language::Indonesia) => Some("id".into()),
-            Some(Language::Multilingual) | None => None,
-        }
+        self.language
+            .as_deref()
+            .and_then(whisper_language_code)
+            .map(str::to_owned)
     }
 
     fn options(&self) -> AsrOptions {
@@ -243,10 +253,16 @@ fn models_command(action: ModelsCommand) -> Result<()> {
     match action {
         ModelsCommand::Root => println!("{}", models_root().display()),
         ModelsCommand::List { language } => {
-            let filter = language.as_deref().and_then(Language::parse);
+            let filter = language
+                .as_deref()
+                .map(|id| {
+                    speech_language(id)
+                        .map(|_| id)
+                        .with_context(|| format!("unknown language id: {id}"))
+                })
+                .transpose()?;
             for item in santhra_models::catalog() {
-                if filter.is_some_and(|lang| !santhra_models::matches_language(item.language, lang))
-                {
+                if filter.is_some_and(|id| !santhra_models::matches_language_id(item, id)) {
                     continue;
                 }
                 let installed = santhra_models::resolve(item, &model_dir(item.id)?).is_ok();
@@ -262,9 +278,6 @@ fn models_command(action: ModelsCommand) -> Result<()> {
                         "not downloaded"
                     }
                 );
-            }
-            if let Some(lang) = filter {
-                let _ = for_language(lang);
             }
         }
         ModelsCommand::Download { id } => {

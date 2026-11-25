@@ -46,20 +46,25 @@ cargo run -p santhra-cli -- transcribe path/to/file.wav  # transcribe a 16 kHz m
 ```
 
 Useful flags: `--no-partial` (final segments only), `--max-lines <n>`, `--model-dir <path>`,
-`--threads <n>`, `--language <lang>`, `--model <id>`, `--buffer-ms <n>`.
+`--threads <n>`, `--language <language-id>` (from the Settings language list), `--model <id>`,
+`--buffer-ms <n>`. Whisper language choices are passed as language codes; `multilingual` enables
+automatic detection.
 
 Bundled models can be listed, downloaded and verified from the CLI:
 
 ```bash
-santhra-cli models list [--language english|chinese|indonesia|multilingual]
+santhra-cli models list [--language <language-id>]  # e.g. english, french, indonesia, multilingual
 santhra-cli models download <id>
 santhra-cli models verify <id>
+santhra-cli live --language indonesia --model whisper-small-multilingual
 ```
 
 Downloads come from official sherpa-onnx Hugging Face repositories into
 `~/.local/share/santhra/models/<id>/` and are checked against SHA256 + size from the bundled
 manifest. The same manager is available in the desktop app under Settings → Model, where you can
-pick a language and model, watch progress, and cancel a download. Offline models buffer about
+pick a language and one of its compatible models, watch progress, and cancel a download. Whisper
+Tiny, Base and Small multilingual checkpoints are available for supported languages; larger
+checkpoints trade disk/RAM and latency for a stronger model. Offline models buffer about
 2.5 s and do not show partial captions. Model licences and source repositories are listed in
 Settings → About.
 
@@ -70,7 +75,10 @@ cargo run -p santhra-desktop
 ```
 
 Settings live in `~/.config/santhra/config.toml` and are written by the app. Delete that file
-to reset. The caption font can be picked from the installed system fonts (fontconfig); fonts
+to reset. Recognition language includes the language set supported by the multilingual Whisper
+model, with automatic detection available; the selected language is passed to Whisper when
+applicable. Model choices remain limited to compatible ASR models in Santhra's catalog. The
+caption font can be picked from the installed system fonts (fontconfig); fonts
 dropped into `~/.local/share/fonts` show up after `fc-cache -f`.
 
 ### Floating overlay

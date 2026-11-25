@@ -4,7 +4,7 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Card, Combobox, ComboboxOption, Field, Kit,
     Progress, Slider, Switch, TextInput,
 };
-use santhra_models::{Language, catalog, entry, model_dir};
+use santhra_models::{Language, catalog, entry, model_dir, speech_language, speech_languages};
 
 use crate::app::{
     DownloadStatus, FontChoice, Shared, State, cancel_download, leaked_family, refresh_model,
@@ -155,9 +155,14 @@ pub(crate) fn recognition_body(
         .language
         .clone()
         .unwrap_or_else(|| Language::English.as_str().to_owned());
-    let language_options: Vec<ComboboxOption> = Language::ALL
-        .into_iter()
-        .map(|lang| ComboboxOption::new(lang.as_str(), lang.label()))
+    let language_options: Vec<ComboboxOption> = speech_languages()
+        .iter()
+        .filter(|language| {
+            catalog()
+                .iter()
+                .any(|model| santhra_models::matches_language_id(model, language.id))
+        })
+        .map(|lang| ComboboxOption::new(lang.id, lang.label))
         .collect();
     let language_picker = Combobox::new(
         "language",
@@ -168,18 +173,16 @@ pub(crate) fn recognition_body(
     .label("Language")
     .current(Some(language_value.as_str()))
     .on_choose(|s, id, _| {
-        if let Some(lang) = Language::ALL.into_iter().find(|lang| lang.as_str() == id) {
-            set_language(s, lang.as_str());
+        if let Some(language) = speech_language(id) {
+            set_language(s, language.id);
         }
     })
     .build(kit, overlays);
 
-    let language = settings.language.as_deref().and_then(Language::parse);
+    let language = settings.language.as_deref();
     let mut model_options: Vec<ComboboxOption> = catalog()
         .iter()
-        .filter(|item| {
-            language.is_none_or(|lang| santhra_models::matches_language(item.language, lang))
-        })
+        .filter(|item| language.is_none_or(|id| santhra_models::matches_language_id(item, id)))
         .map(|item| ComboboxOption::new(item.id, item.label))
         .collect();
     if !model_options.iter().any(|option| option.id == target.id) {
@@ -524,16 +527,15 @@ fn set_language(s: &mut State, id: &'static str) {
     {
         let mut settings = shared.settings.lock().unwrap();
         settings.language = Some(id.to_owned());
-        if let Some(language) = Language::parse(id) {
-            let current = settings.model_id.as_deref().and_then(entry);
-            if current.is_none_or(|item| item.language != language) {
-                let default = santhra_models::default_for(language);
-                settings.model_id = Some(default.id.into());
-                settings.model_kind = Some(default.kind.as_str().into());
-                settings.model_dir = model_dir(default.id)
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or_else(|_| settings.model_dir.clone());
-            }
+        let current = settings.model_id.as_deref().and_then(entry);
+        if current.is_none_or(|item| !santhra_models::matches_language_id(item, id))
+            && let Some(default) = santhra_models::default_for_id(id)
+        {
+            settings.model_id = Some(default.id.into());
+            settings.model_kind = Some(default.kind.as_str().into());
+            settings.model_dir = model_dir(default.id)
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_else(|_| settings.model_dir.clone());
         }
     }
     s.pending_model = None;

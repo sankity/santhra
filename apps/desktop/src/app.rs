@@ -666,7 +666,10 @@ pub fn use_model(id: &str) {
         settings.model_dir = santhra_models::model_dir(id)
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| settings.model_dir.clone());
-        settings.language = Some(entry.language.as_str().to_owned());
+        let language = settings.language.as_deref().unwrap_or("english");
+        if !santhra_models::matches_language_id(entry, language) {
+            settings.language = Some(entry.language.as_str().to_owned());
+        }
     }
     shared.apply_settings();
 }
