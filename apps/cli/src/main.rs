@@ -79,7 +79,7 @@ struct Common {
 
     #[arg(
         long,
-        help = "Speech language id from the multilingual ASR language list"
+        help = "Speech language id from Santhra's supported recognition language list"
     )]
     language: Option<String>,
 

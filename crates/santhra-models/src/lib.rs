@@ -48,7 +48,7 @@ impl fmt::Display for Language {
     }
 }
 
-/// Language codes accepted by Whisper's multilingual tokenizer, plus automatic detection.
+/// Recognition languages currently exposed by Santhra.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpeechLanguage {
     pub id: &'static str,
@@ -58,404 +58,14 @@ pub struct SpeechLanguage {
 
 const SPEECH_LANGUAGES: &[SpeechLanguage] = &[
     SpeechLanguage {
-        id: "multilingual",
-        label: "Auto-detect (multilingual)",
-        whisper_code: None,
-    },
-    SpeechLanguage {
-        id: "afrikaans",
-        label: "Afrikaans",
-        whisper_code: Some("af"),
-    },
-    SpeechLanguage {
-        id: "albanian",
-        label: "Albanian",
-        whisper_code: Some("sq"),
-    },
-    SpeechLanguage {
-        id: "amharic",
-        label: "Amharic",
-        whisper_code: Some("am"),
-    },
-    SpeechLanguage {
-        id: "arabic",
-        label: "Arabic",
-        whisper_code: Some("ar"),
-    },
-    SpeechLanguage {
-        id: "armenian",
-        label: "Armenian",
-        whisper_code: Some("hy"),
-    },
-    SpeechLanguage {
-        id: "assamese",
-        label: "Assamese",
-        whisper_code: Some("as"),
-    },
-    SpeechLanguage {
-        id: "azerbaijani",
-        label: "Azerbaijani",
-        whisper_code: Some("az"),
-    },
-    SpeechLanguage {
-        id: "bashkir",
-        label: "Bashkir",
-        whisper_code: Some("ba"),
-    },
-    SpeechLanguage {
-        id: "basque",
-        label: "Basque",
-        whisper_code: Some("eu"),
-    },
-    SpeechLanguage {
-        id: "belarusian",
-        label: "Belarusian",
-        whisper_code: Some("be"),
-    },
-    SpeechLanguage {
-        id: "bengali",
-        label: "Bengali",
-        whisper_code: Some("bn"),
-    },
-    SpeechLanguage {
-        id: "bosnian",
-        label: "Bosnian",
-        whisper_code: Some("bs"),
-    },
-    SpeechLanguage {
-        id: "breton",
-        label: "Breton",
-        whisper_code: Some("br"),
-    },
-    SpeechLanguage {
-        id: "bulgarian",
-        label: "Bulgarian",
-        whisper_code: Some("bg"),
-    },
-    SpeechLanguage {
-        id: "catalan",
-        label: "Catalan",
-        whisper_code: Some("ca"),
-    },
-    SpeechLanguage {
-        id: "chinese",
-        label: "Chinese",
-        whisper_code: Some("zh"),
-    },
-    SpeechLanguage {
-        id: "croatian",
-        label: "Croatian",
-        whisper_code: Some("hr"),
-    },
-    SpeechLanguage {
-        id: "czech",
-        label: "Czech",
-        whisper_code: Some("cs"),
-    },
-    SpeechLanguage {
-        id: "danish",
-        label: "Danish",
-        whisper_code: Some("da"),
-    },
-    SpeechLanguage {
-        id: "dutch",
-        label: "Dutch",
-        whisper_code: Some("nl"),
-    },
-    SpeechLanguage {
         id: "english",
         label: "English",
         whisper_code: Some("en"),
     },
     SpeechLanguage {
-        id: "estonian",
-        label: "Estonian",
-        whisper_code: Some("et"),
-    },
-    SpeechLanguage {
-        id: "faroese",
-        label: "Faroese",
-        whisper_code: Some("fo"),
-    },
-    SpeechLanguage {
-        id: "finnish",
-        label: "Finnish",
-        whisper_code: Some("fi"),
-    },
-    SpeechLanguage {
-        id: "french",
-        label: "French",
-        whisper_code: Some("fr"),
-    },
-    SpeechLanguage {
-        id: "galician",
-        label: "Galician",
-        whisper_code: Some("gl"),
-    },
-    SpeechLanguage {
-        id: "georgian",
-        label: "Georgian",
-        whisper_code: Some("ka"),
-    },
-    SpeechLanguage {
-        id: "german",
-        label: "German",
-        whisper_code: Some("de"),
-    },
-    SpeechLanguage {
-        id: "greek",
-        label: "Greek",
-        whisper_code: Some("el"),
-    },
-    SpeechLanguage {
-        id: "gujarati",
-        label: "Gujarati",
-        whisper_code: Some("gu"),
-    },
-    SpeechLanguage {
-        id: "haitian-creole",
-        label: "Haitian Creole",
-        whisper_code: Some("ht"),
-    },
-    SpeechLanguage {
-        id: "hausa",
-        label: "Hausa",
-        whisper_code: Some("ha"),
-    },
-    SpeechLanguage {
-        id: "hawaiian",
-        label: "Hawaiian",
-        whisper_code: Some("haw"),
-    },
-    SpeechLanguage {
-        id: "hebrew",
-        label: "Hebrew",
-        whisper_code: Some("he"),
-    },
-    SpeechLanguage {
-        id: "hindi",
-        label: "Hindi",
-        whisper_code: Some("hi"),
-    },
-    SpeechLanguage {
-        id: "hungarian",
-        label: "Hungarian",
-        whisper_code: Some("hu"),
-    },
-    SpeechLanguage {
-        id: "icelandic",
-        label: "Icelandic",
-        whisper_code: Some("is"),
-    },
-    SpeechLanguage {
-        id: "indonesia",
-        label: "Indonesian",
-        whisper_code: Some("id"),
-    },
-    SpeechLanguage {
-        id: "italian",
-        label: "Italian",
-        whisper_code: Some("it"),
-    },
-    SpeechLanguage {
-        id: "japanese",
-        label: "Japanese",
-        whisper_code: Some("ja"),
-    },
-    SpeechLanguage {
-        id: "javanese",
-        label: "Javanese",
-        whisper_code: Some("jw"),
-    },
-    SpeechLanguage {
-        id: "kannada",
-        label: "Kannada",
-        whisper_code: Some("kn"),
-    },
-    SpeechLanguage {
-        id: "kazakh",
-        label: "Kazakh",
-        whisper_code: Some("kk"),
-    },
-    SpeechLanguage {
-        id: "khmer",
-        label: "Khmer",
-        whisper_code: Some("km"),
-    },
-    SpeechLanguage {
-        id: "korean",
-        label: "Korean",
-        whisper_code: Some("ko"),
-    },
-    SpeechLanguage {
-        id: "lao",
-        label: "Lao",
-        whisper_code: Some("lo"),
-    },
-    SpeechLanguage {
-        id: "latin",
-        label: "Latin",
-        whisper_code: Some("la"),
-    },
-    SpeechLanguage {
-        id: "latvian",
-        label: "Latvian",
-        whisper_code: Some("lv"),
-    },
-    SpeechLanguage {
-        id: "lingala",
-        label: "Lingala",
-        whisper_code: Some("ln"),
-    },
-    SpeechLanguage {
-        id: "lithuanian",
-        label: "Lithuanian",
-        whisper_code: Some("lt"),
-    },
-    SpeechLanguage {
-        id: "luxembourgish",
-        label: "Luxembourgish",
-        whisper_code: Some("lb"),
-    },
-    SpeechLanguage {
-        id: "macedonian",
-        label: "Macedonian",
-        whisper_code: Some("mk"),
-    },
-    SpeechLanguage {
-        id: "malagasy",
-        label: "Malagasy",
-        whisper_code: Some("mg"),
-    },
-    SpeechLanguage {
-        id: "malay",
-        label: "Malay",
-        whisper_code: Some("ms"),
-    },
-    SpeechLanguage {
-        id: "malayalam",
-        label: "Malayalam",
-        whisper_code: Some("ml"),
-    },
-    SpeechLanguage {
-        id: "maltese",
-        label: "Maltese",
-        whisper_code: Some("mt"),
-    },
-    SpeechLanguage {
-        id: "maori",
-        label: "Maori",
-        whisper_code: Some("mi"),
-    },
-    SpeechLanguage {
-        id: "marathi",
-        label: "Marathi",
-        whisper_code: Some("mr"),
-    },
-    SpeechLanguage {
-        id: "mongolian",
-        label: "Mongolian",
-        whisper_code: Some("mn"),
-    },
-    SpeechLanguage {
-        id: "myanmar",
-        label: "Myanmar",
-        whisper_code: Some("my"),
-    },
-    SpeechLanguage {
-        id: "nepali",
-        label: "Nepali",
-        whisper_code: Some("ne"),
-    },
-    SpeechLanguage {
-        id: "norwegian",
-        label: "Norwegian",
-        whisper_code: Some("no"),
-    },
-    SpeechLanguage {
-        id: "nynorsk",
-        label: "Nynorsk",
-        whisper_code: Some("nn"),
-    },
-    SpeechLanguage {
-        id: "occitan",
-        label: "Occitan",
-        whisper_code: Some("oc"),
-    },
-    SpeechLanguage {
-        id: "pashto",
-        label: "Pashto",
-        whisper_code: Some("ps"),
-    },
-    SpeechLanguage {
-        id: "persian",
-        label: "Persian",
-        whisper_code: Some("fa"),
-    },
-    SpeechLanguage {
-        id: "polish",
-        label: "Polish",
-        whisper_code: Some("pl"),
-    },
-    SpeechLanguage {
-        id: "portuguese",
-        label: "Portuguese",
-        whisper_code: Some("pt"),
-    },
-    SpeechLanguage {
-        id: "punjabi",
-        label: "Punjabi",
-        whisper_code: Some("pa"),
-    },
-    SpeechLanguage {
-        id: "romanian",
-        label: "Romanian",
-        whisper_code: Some("ro"),
-    },
-    SpeechLanguage {
-        id: "russian",
-        label: "Russian",
-        whisper_code: Some("ru"),
-    },
-    SpeechLanguage {
-        id: "sanskrit",
-        label: "Sanskrit",
-        whisper_code: Some("sa"),
-    },
-    SpeechLanguage {
-        id: "serbian",
-        label: "Serbian",
-        whisper_code: Some("sr"),
-    },
-    SpeechLanguage {
-        id: "shona",
-        label: "Shona",
-        whisper_code: Some("sn"),
-    },
-    SpeechLanguage {
-        id: "sindhi",
-        label: "Sindhi",
-        whisper_code: Some("sd"),
-    },
-    SpeechLanguage {
-        id: "sinhala",
-        label: "Sinhala",
-        whisper_code: Some("si"),
-    },
-    SpeechLanguage {
-        id: "slovak",
-        label: "Slovak",
-        whisper_code: Some("sk"),
-    },
-    SpeechLanguage {
-        id: "slovenian",
-        label: "Slovenian",
-        whisper_code: Some("sl"),
-    },
-    SpeechLanguage {
-        id: "somali",
-        label: "Somali",
-        whisper_code: Some("so"),
+        id: "chinese",
+        label: "Mandarin Chinese",
+        whisper_code: Some("zh"),
     },
     SpeechLanguage {
         id: "spanish",
@@ -463,104 +73,39 @@ const SPEECH_LANGUAGES: &[SpeechLanguage] = &[
         whisper_code: Some("es"),
     },
     SpeechLanguage {
-        id: "sundanese",
-        label: "Sundanese",
-        whisper_code: Some("su"),
+        id: "hindi",
+        label: "Hindi",
+        whisper_code: Some("hi"),
     },
     SpeechLanguage {
-        id: "swahili",
-        label: "Swahili",
-        whisper_code: Some("sw"),
+        id: "indonesia",
+        label: "Indonesian",
+        whisper_code: Some("id"),
     },
     SpeechLanguage {
-        id: "swedish",
-        label: "Swedish",
-        whisper_code: Some("sv"),
+        id: "french",
+        label: "French",
+        whisper_code: Some("fr"),
     },
     SpeechLanguage {
-        id: "tagalog",
-        label: "Tagalog",
-        whisper_code: Some("tl"),
+        id: "german",
+        label: "German",
+        whisper_code: Some("de"),
     },
     SpeechLanguage {
-        id: "tajik",
-        label: "Tajik",
-        whisper_code: Some("tg"),
+        id: "japanese",
+        label: "Japanese",
+        whisper_code: Some("ja"),
     },
     SpeechLanguage {
-        id: "tamil",
-        label: "Tamil",
-        whisper_code: Some("ta"),
+        id: "portuguese",
+        label: "Portuguese",
+        whisper_code: Some("pt"),
     },
     SpeechLanguage {
-        id: "tatar",
-        label: "Tatar",
-        whisper_code: Some("tt"),
-    },
-    SpeechLanguage {
-        id: "telugu",
-        label: "Telugu",
-        whisper_code: Some("te"),
-    },
-    SpeechLanguage {
-        id: "thai",
-        label: "Thai",
-        whisper_code: Some("th"),
-    },
-    SpeechLanguage {
-        id: "tibetan",
-        label: "Tibetan",
-        whisper_code: Some("bo"),
-    },
-    SpeechLanguage {
-        id: "turkish",
-        label: "Turkish",
-        whisper_code: Some("tr"),
-    },
-    SpeechLanguage {
-        id: "turkmen",
-        label: "Turkmen",
-        whisper_code: Some("tk"),
-    },
-    SpeechLanguage {
-        id: "ukrainian",
-        label: "Ukrainian",
-        whisper_code: Some("uk"),
-    },
-    SpeechLanguage {
-        id: "urdu",
-        label: "Urdu",
-        whisper_code: Some("ur"),
-    },
-    SpeechLanguage {
-        id: "uzbek",
-        label: "Uzbek",
-        whisper_code: Some("uz"),
-    },
-    SpeechLanguage {
-        id: "vietnamese",
-        label: "Vietnamese",
-        whisper_code: Some("vi"),
-    },
-    SpeechLanguage {
-        id: "welsh",
-        label: "Welsh",
-        whisper_code: Some("cy"),
-    },
-    SpeechLanguage {
-        id: "yiddish",
-        label: "Yiddish",
-        whisper_code: Some("yi"),
-    },
-    SpeechLanguage {
-        id: "yoruba",
-        label: "Yoruba",
-        whisper_code: Some("yo"),
-    },
-    SpeechLanguage {
-        id: "cantonese",
-        label: "Cantonese",
-        whisper_code: Some("yue"),
+        id: "russian",
+        label: "Russian",
+        whisper_code: Some("ru"),
     },
 ];
 
@@ -832,8 +377,7 @@ pub fn matches_language_id(model: &ModelEntry, selected: &str) -> bool {
     match model.language_support {
         LanguageSupport::Languages(languages) => languages.contains(&selected),
         LanguageSupport::WhisperMultilingual => {
-            selected == Language::Multilingual.as_str()
-                || speech_language(selected).is_some_and(|language| language.whisper_code.is_some())
+            speech_language(selected).is_some_and(|language| language.whisper_code.is_some())
         }
     }
 }
@@ -995,7 +539,8 @@ mod tests {
             assert!(matches_language_id(model, "french"));
             assert!(matches_language_id(model, "japanese"));
             assert!(matches_language_id(model, "indonesia"));
-            assert!(matches_language_id(model, "multilingual"));
+            assert!(!matches_language_id(model, "multilingual"));
+            assert!(!matches_language_id(model, "afrikaans"));
             assert!(!matches_language_id(model, "not-a-language"));
         }
         assert!(matches_language_id(zipformer_english, "english"));
@@ -1007,6 +552,36 @@ mod tests {
             "whisper-tiny-multilingual"
         );
         assert_eq!(default_for_id("english").unwrap().id, "zipformer-en-20m");
+        assert!(default_for_id("afrikaans").is_none());
+        assert!(default_for_id("multilingual").is_none());
+    }
+
+    #[test]
+    fn selectable_languages_are_limited_to_the_supported_set() {
+        let ids: Vec<_> = speech_languages()
+            .iter()
+            .map(|language| language.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "english",
+                "chinese",
+                "spanish",
+                "hindi",
+                "indonesia",
+                "french",
+                "german",
+                "japanese",
+                "portuguese",
+                "russian",
+            ]
+        );
+        assert_eq!(
+            speech_language("chinese").unwrap().label,
+            "Mandarin Chinese"
+        );
+        assert!(speech_language("multilingual").is_none());
     }
 
     #[test]

@@ -10,3 +10,9 @@
 | Whisper Small multilingual INT8 (`whisper-small-multilingual`) | https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small | MIT (upstream Whisper license) | ~375 MB | `small-encoder.int8.onnx`, `small-decoder.int8.onnx`, `small-tokens.txt` |
 
 Whisper language support is restricted to the multilingual tokenizer languages. The `.en` Whisper variants are intentionally not listed because they only support English. Licenses and source cards must be re-verified before public redistribution.
+
+## Evaluation audio
+
+| Dataset | Source | License | Use |
+|---|---|---|---|
+| FLEURS test split (`google/fleurs`) | https://huggingface.co/datasets/google/fleurs | CC-BY-4.0 | Per-language speech evaluation with reference transcripts; not a music/lyrics benchmark. `scripts/test-asr-language.py` downloads only a selected language's test archive after explicit opt-in and stores extracted WAVs plus references, source identifiers, and SHA-256 hashes in the local cache. |

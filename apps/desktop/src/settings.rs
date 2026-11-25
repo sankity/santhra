@@ -89,10 +89,29 @@ impl Settings {
     }
 
     pub fn load_from(path: &Path) -> Self {
-        fs::read_to_string(path)
+        let mut settings: Self = fs::read_to_string(path)
             .ok()
             .and_then(|text| toml::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        if settings
+            .language
+            .as_deref()
+            .is_some_and(|language| santhra_models::speech_language(language).is_none())
+        {
+            settings.language = Some("english".into());
+            let model = settings.model_id.as_deref().and_then(santhra_models::entry);
+            if model.is_none_or(|model| !santhra_models::matches_language_id(model, "english"))
+                && let Some(default) = santhra_models::default_for_id("english")
+            {
+                settings.model_id = Some(default.id.into());
+                settings.model_kind = Some(default.kind.as_str().into());
+                settings.model_dir = santhra_models::model_dir(default.id)
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or(settings.model_dir);
+            }
+        }
+        settings
     }
 
     pub fn save(&self) -> Result<()> {
@@ -211,6 +230,28 @@ mod tests {
 
         settings.language = Some("multilingual".into());
         assert_eq!(settings.session_options().language, None);
+    }
+
+    #[test]
+    fn unsupported_saved_language_falls_back_to_english_and_compatible_model() {
+        let dir =
+            std::env::temp_dir().join(format!("santhra-language-migration-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).expect("dir");
+        fs::write(
+            &path,
+            r#"language = "faroese"
+model_id = "paraformer-zh-offline"
+model_kind = "paraformer-offline"
+"#,
+        )
+        .expect("write old settings");
+
+        let settings = Settings::load_from(&path);
+        assert_eq!(settings.language.as_deref(), Some("english"));
+        assert_eq!(settings.model_id.as_deref(), Some("zipformer-en-20m"));
+        assert_eq!(settings.model_kind.as_deref(), Some("zipformer"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
