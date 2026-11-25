@@ -163,6 +163,7 @@ impl Common {
                 CatalogKind::ParaformerOnline => ModelKind::ParaformerOnline,
                 CatalogKind::ParaformerOffline => ModelKind::ParaformerOffline,
                 CatalogKind::WhisperOffline => ModelKind::WhisperOffline,
+                CatalogKind::NemoStreamingTransducer => ModelKind::NemoStreamingTransducer,
             },
             _ => ModelKind::ZipformerTransducer,
         }

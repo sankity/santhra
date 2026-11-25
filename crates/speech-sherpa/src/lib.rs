@@ -31,6 +31,14 @@ pub enum ModelFiles {
         decoder: PathBuf,
         tokens: PathBuf,
     },
+    /// NeMo cache-aware FastConformer-RNNT (Nemotron streaming). sherpa-onnx selects its NeMo
+    /// implementation from the decoder ONNX; the language is a per-stream option.
+    NemoTransducer {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        joiner: PathBuf,
+        tokens: PathBuf,
+    },
 }
 
 fn pick(dir: &Path, names: &[&str]) -> Result<PathBuf> {
@@ -144,6 +152,12 @@ impl ModelFiles {
                 decoder: pick_whisper_component(dir, "decoder")?,
                 tokens: pick_suffix(dir, "-tokens.txt").or_else(|_| pick(dir, &["tokens.txt"]))?,
             },
+            ModelKind::NemoStreamingTransducer => Self::NemoTransducer {
+                encoder: pick(dir, &["encoder.int8.onnx", "encoder.onnx"])?,
+                decoder: pick(dir, &["decoder.int8.onnx", "decoder.onnx"])?,
+                joiner: pick(dir, &["joiner.int8.onnx", "joiner.onnx"])?,
+                tokens: pick(dir, &["tokens.txt"])?,
+            },
         };
         Ok(model)
     }
@@ -154,6 +168,7 @@ impl ModelFiles {
             ModelFiles::ParaformerOnline { .. } => ModelKind::ParaformerOnline,
             ModelFiles::ParaformerOffline { .. } => ModelKind::ParaformerOffline,
             ModelFiles::Whisper { .. } => ModelKind::WhisperOffline,
+            ModelFiles::NemoTransducer { .. } => ModelKind::NemoStreamingTransducer,
         }
     }
 
@@ -162,7 +177,8 @@ impl ModelFiles {
             ModelFiles::Zipformer { tokens, .. }
             | ModelFiles::ParaformerOnline { tokens, .. }
             | ModelFiles::ParaformerOffline { tokens, .. }
-            | ModelFiles::Whisper { tokens, .. } => tokens,
+            | ModelFiles::Whisper { tokens, .. }
+            | ModelFiles::NemoTransducer { tokens, .. } => tokens,
         }
     }
 
@@ -171,6 +187,12 @@ impl ModelFiles {
         let model = &mut config.model_config;
         match self {
             ModelFiles::Zipformer {
+                encoder,
+                decoder,
+                joiner,
+                ..
+            }
+            | ModelFiles::NemoTransducer {
                 encoder,
                 decoder,
                 joiner,
@@ -257,6 +279,8 @@ enum Engine {
         recognizer: OnlineRecognizer,
         stream: OnlineStream,
         last_partial: String,
+        /// Per-stream model option. Only NeMo multilingual models consume it.
+        language: Option<String>,
     },
     Offline {
         recognizer: OfflineRecognizer,
@@ -272,14 +296,23 @@ pub struct Transcriber {
 impl Transcriber {
     pub fn new(model: &ModelFiles, opts: &AsrOptions) -> Result<Self> {
         let engine = match model {
-            ModelFiles::Zipformer { .. } | ModelFiles::ParaformerOnline { .. } => {
+            ModelFiles::Zipformer { .. }
+            | ModelFiles::ParaformerOnline { .. }
+            | ModelFiles::NemoTransducer { .. } => {
                 let recognizer = OnlineRecognizer::create(&model.online_config(opts)?)
                     .context("sherpa-onnx rejected the streaming model config")?;
-                let stream = recognizer.create_stream();
+                // Only the multilingual NeMo transducer reads this option; it selects the
+                // language-ID prompt and defaults to auto-detection when unset.
+                let language = match model {
+                    ModelFiles::NemoTransducer { .. } => opts.language.clone(),
+                    _ => None,
+                };
+                let stream = create_online_stream(&recognizer, language.as_deref());
                 Engine::Online {
                     recognizer,
                     stream,
                     last_partial: String::new(),
+                    language,
                 }
             }
             ModelFiles::ParaformerOffline { .. } | ModelFiles::Whisper { .. } => {
@@ -303,8 +336,9 @@ impl Transcriber {
                 recognizer,
                 stream,
                 last_partial,
+                language,
             } => {
-                *stream = recognizer.create_stream();
+                *stream = create_online_stream(recognizer, language.as_deref());
                 last_partial.clear();
             }
             Engine::Offline { buffer, .. } => buffer.clear(),
@@ -317,6 +351,7 @@ impl Transcriber {
                 recognizer,
                 stream,
                 last_partial,
+                ..
             } => {
                 if !samples.is_empty() {
                     stream.accept_waveform(SAMPLE_RATE, samples);
@@ -345,6 +380,7 @@ impl Transcriber {
                 recognizer,
                 stream,
                 last_partial,
+                ..
             } => {
                 stream.input_finished();
                 let mut events = decode_online(recognizer, stream, last_partial);
@@ -365,6 +401,18 @@ impl Transcriber {
             }
         }
     }
+}
+
+/// Create a stream and apply the per-stream model options it needs.
+///
+/// `reset()` replaces the stream, so this is the only way streams are created; a fresh
+/// `create_stream()` starts with empty options.
+fn create_online_stream(recognizer: &OnlineRecognizer, language: Option<&str>) -> OnlineStream {
+    let stream = recognizer.create_stream();
+    if let Some(code) = language {
+        stream.set_option("language", code);
+    }
+    stream
 }
 
 fn decode_online(
@@ -486,6 +534,26 @@ mod tests {
             assert_eq!(model.kind(), ModelKind::WhisperOffline);
             let _ = std::fs::remove_dir_all(dir);
         }
+    }
+
+    #[test]
+    fn nemo_loader_accepts_nemotron_file_names() {
+        let dir = std::env::temp_dir().join(format!("santhra-nemo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("model dir");
+        for name in [
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ] {
+            std::fs::write(dir.join(name), []).expect("create model file");
+        }
+        let model = ModelFiles::load_kind(&dir, ModelKind::NemoStreamingTransducer)
+            .expect("load Nemotron model");
+        assert_eq!(model.kind(), ModelKind::NemoStreamingTransducer);
+        assert!(model.online_config(&AsrOptions::default()).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

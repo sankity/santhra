@@ -127,6 +127,7 @@ pub enum ModelKind {
     ParaformerOnline,
     ParaformerOffline,
     WhisperOffline,
+    NemoStreamingTransducer,
 }
 
 impl ModelKind {
@@ -136,6 +137,7 @@ impl ModelKind {
             ModelKind::ParaformerOnline => "paraformer-online",
             ModelKind::ParaformerOffline => "paraformer-offline",
             ModelKind::WhisperOffline => "whisper-offline",
+            ModelKind::NemoStreamingTransducer => "nemo-streaming",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -144,6 +146,7 @@ impl ModelKind {
             ModelKind::ParaformerOnline,
             ModelKind::ParaformerOffline,
             ModelKind::WhisperOffline,
+            ModelKind::NemoStreamingTransducer,
         ]
         .into_iter()
         .find(|kind| kind.as_str() == value)
@@ -359,6 +362,55 @@ static CATALOG: &[ModelEntry] = &[
             },
         ],
     },
+    // NVIDIA Nemotron 3.5 ASR: cache-aware FastConformer-RNNT with a language-ID prompt.
+    // sherpa-onnx picks its NeMo streaming implementation from the decoder ONNX itself; the
+    // language is a per-stream option (see speech-sherpa). Indonesian is absent from the model's
+    // 39 locale tags, so it is deliberately not listed in language_support.
+    ModelEntry {
+        id: "nemotron-3-5-asr-560ms",
+        label: "Nemotron 3.5 ASR 0.6B (streaming, multilingual, int8)",
+        language: Language::Multilingual,
+        language_support: LanguageSupport::Languages(&[
+            "english",
+            "chinese",
+            "spanish",
+            "hindi",
+            "french",
+            "german",
+            "japanese",
+            "portuguese",
+            "russian",
+        ]),
+        kind: ModelKind::NemoStreamingTransducer,
+        license: "OpenMDW-1.1",
+        source: "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11",
+        files: &[
+            RemoteFile {
+                name: "encoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/encoder.int8.onnx",
+                sha256: "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+                bytes: 657_601_403,
+            },
+            RemoteFile {
+                name: "decoder.int8.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/decoder.int8.onnx",
+                sha256: "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+                bytes: 14_978_075,
+            },
+            RemoteFile {
+                name: "joiner.int8.onnx",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/joiner.int8.onnx",
+                sha256: "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+                bytes: 9_504_438,
+            },
+            RemoteFile {
+                name: "tokens.txt",
+                url: "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/tokens.txt",
+                sha256: "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
+                bytes: 131_440,
+            },
+        ],
+    },
 ];
 
 pub fn catalog() -> &'static [ModelEntry] {
@@ -534,6 +586,7 @@ mod tests {
         let whisper_small = entry("whisper-small-multilingual").unwrap();
         let zipformer_english = entry("zipformer-en-20m").unwrap();
         let paraformer_chinese = entry("paraformer-zh-offline").unwrap();
+        let nemotron = entry("nemotron-3-5-asr-560ms").unwrap();
 
         for model in [whisper_tiny, whisper_base, whisper_small] {
             assert!(matches_language_id(model, "french"));
@@ -547,6 +600,21 @@ mod tests {
         assert!(!matches_language_id(zipformer_english, "french"));
         assert!(matches_language_id(paraformer_chinese, "chinese"));
         assert!(!matches_language_id(paraformer_chinese, "english"));
+        for language in [
+            "english",
+            "chinese",
+            "spanish",
+            "hindi",
+            "french",
+            "german",
+            "japanese",
+            "portuguese",
+            "russian",
+        ] {
+            assert!(matches_language_id(nemotron, language));
+        }
+        assert!(!matches_language_id(nemotron, "indonesia"));
+        assert!(!matches_language_id(nemotron, "multilingual"));
         assert_eq!(
             default_for_id("french").unwrap().id,
             "whisper-tiny-multilingual"
@@ -587,7 +655,12 @@ mod tests {
     #[test]
     fn language_filter_lists_every_compatible_model() {
         let french_models = for_language_id("french");
-        assert_eq!(french_models.len(), 3);
+        assert_eq!(french_models.len(), 4);
+        assert!(
+            french_models
+                .iter()
+                .any(|model| model.id == "nemotron-3-5-asr-560ms")
+        );
         assert!(
             french_models
                 .iter()
@@ -603,7 +676,8 @@ mod tests {
                 .iter()
                 .any(|model| model.id == "whisper-small-multilingual")
         );
-        assert_eq!(for_language_id("chinese").len(), 5);
+        assert_eq!(for_language_id("chinese").len(), 6);
+        assert_eq!(for_language_id("indonesia").len(), 3);
         assert!(for_language_id("unknown").is_empty());
     }
 

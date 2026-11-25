@@ -201,6 +201,7 @@ fn model_kind(kind: santhra_models::ModelKind) -> ModelKind {
         santhra_models::ModelKind::ParaformerOnline => ModelKind::ParaformerOnline,
         santhra_models::ModelKind::ParaformerOffline => ModelKind::ParaformerOffline,
         santhra_models::ModelKind::WhisperOffline => ModelKind::WhisperOffline,
+        santhra_models::ModelKind::NemoStreamingTransducer => ModelKind::NemoStreamingTransducer,
     }
 }
 

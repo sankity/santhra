@@ -23,5 +23,8 @@ default sink input (PipeWire, stream.capture.sink=true)
 Capture never blocks on inference; inference runs only on the consumer side of a bounded queue.
 The GUI polls messages from `app-core::Session`, so the event loop never runs capture or inference.
 
+Streaming models are transducers. The multilingual NeMo model (Nemotron) also takes a per-stream
+`language` option; `speech-sherpa` applies it every time it creates a stream.
+
 The desktop app renders one `CaptionSnapshot` on two surfaces: the main window and an optional
 floating overlay viewport (`docs/overlay-support.md` lists which window features each backend honors).

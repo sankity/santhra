@@ -52,7 +52,7 @@ USER_AGENT = "santhra-asr-eval/2.0"
 STAGES = ("smoke", "screening", "accuracy", "streaming", "compare")
 DEFAULT_SAMPLES = {"smoke": 3, "screening": 25, "accuracy": 150, "streaming": 25}
 BUCKETS = ("short", "medium", "long")
-STREAMING_KINDS = frozenset({"zipformer", "paraformer-online"})
+STREAMING_KINDS = frozenset({"zipformer", "paraformer-online", "nemo-streaming"})
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
