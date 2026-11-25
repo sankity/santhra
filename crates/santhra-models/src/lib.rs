@@ -362,6 +362,38 @@ static CATALOG: &[ModelEntry] = &[
             },
         ],
     },
+    // Whisper tiny fine-tune for Indonesian (maleo-ai/whisper-tiny-id), Apache-2.0.
+    // Monolingual Indonesian. Offline Whisper -> final text only (no partials).
+    // fp32 ONNX re-hosted from the sherpa-onnx export; int8 measured ~10 WER points worse here.
+    ModelEntry {
+        id: "whisper-tiny-id",
+        label: "Whisper Tiny ID (Indonesian, offline, fp32)",
+        language: Language::Indonesia,
+        language_support: LanguageSupport::Languages(&["indonesia"]),
+        kind: ModelKind::WhisperOffline,
+        license: "Apache-2.0",
+        source: "maleo-ai/whisper-tiny-id",
+        files: &[
+            RemoteFile {
+                name: "tiny-id-encoder.onnx",
+                url: "https://huggingface.co/sankity/sherpa-onnx-whisper-tiny-id/resolve/main/tiny-id-encoder.onnx",
+                sha256: "6f26efab2fbe9d88bb00f8a72e8fd9b57baf4209c0b2662d35169a59e907bcdc",
+                bytes: 37_634_686,
+            },
+            RemoteFile {
+                name: "tiny-id-decoder.onnx",
+                url: "https://huggingface.co/sankity/sherpa-onnx-whisper-tiny-id/resolve/main/tiny-id-decoder.onnx",
+                sha256: "2a445dae36318dc462091acf540a117e950ea9c7cfb6ee5731dfd99ac42f06ef",
+                bytes: 114_492_417,
+            },
+            RemoteFile {
+                name: "tiny-id-tokens.txt",
+                url: "https://huggingface.co/sankity/sherpa-onnx-whisper-tiny-id/resolve/main/tiny-id-tokens.txt",
+                sha256: "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+                bytes: 816_730,
+            },
+        ],
+    },
     // NVIDIA Nemotron 3.5 ASR: cache-aware FastConformer-RNNT with a language-ID prompt.
     // sherpa-onnx picks its NeMo streaming implementation from the decoder ONNX itself; the
     // language is a per-stream option (see speech-sherpa). Indonesian is absent from the model's
@@ -615,6 +647,10 @@ mod tests {
         }
         assert!(!matches_language_id(nemotron, "indonesia"));
         assert!(!matches_language_id(nemotron, "multilingual"));
+        let whisper_tiny_id = entry("whisper-tiny-id").unwrap();
+        assert!(matches_language_id(whisper_tiny_id, "indonesia"));
+        assert!(!matches_language_id(whisper_tiny_id, "english"));
+        assert!(!matches_language_id(whisper_tiny_id, "multilingual"));
         assert_eq!(
             default_for_id("french").unwrap().id,
             "whisper-tiny-multilingual"
@@ -677,7 +713,13 @@ mod tests {
                 .any(|model| model.id == "whisper-small-multilingual")
         );
         assert_eq!(for_language_id("chinese").len(), 6);
-        assert_eq!(for_language_id("indonesia").len(), 3);
+        let indonesia_models = for_language_id("indonesia");
+        assert_eq!(indonesia_models.len(), 4);
+        assert!(
+            indonesia_models
+                .iter()
+                .any(|model| model.id == "whisper-tiny-id")
+        );
         assert!(for_language_id("unknown").is_empty());
     }
 

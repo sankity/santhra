@@ -57,7 +57,7 @@ Bundled models can be listed, downloaded and verified from the CLI:
 santhra-cli models list [--language <language-id>]  # e.g. english, chinese, indonesia
 santhra-cli models download <id>
 santhra-cli models verify <id>
-santhra-cli live --language indonesia --model whisper-small-multilingual
+santhra-cli live --language indonesia --model whisper-tiny-id
 ```
 
 Downloads come from official sherpa-onnx Hugging Face repositories into
@@ -65,7 +65,9 @@ Downloads come from official sherpa-onnx Hugging Face repositories into
 manifest. The same manager is available in the desktop app under Settings → Model, where you can
 pick a language and one of its compatible models, watch progress, and cancel a download. Whisper
 Tiny, Base and Small multilingual checkpoints are available for supported languages; larger
-checkpoints trade disk/RAM and latency for a stronger model. Offline models buffer about
+checkpoints trade disk/RAM and latency for a stronger model. `whisper-tiny-id` is a dedicated
+Whisper tiny Indonesian fine-tune (Apache-2.0, fp32) offered for Indonesian only and, like the
+other Whisper models, offline. Offline models buffer about
 2.5 s and do not show partial captions. `nemotron-3-5-asr-560ms` is a streaming multilingual
 alternative (~682 MB, OpenMDW-1.1): it picks the language per stream, emits punctuation, and
 refreshes partial captions every 560 ms. It covers 39 locales but not Indonesian, so Indonesian
