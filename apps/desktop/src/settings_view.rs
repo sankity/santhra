@@ -1,8 +1,7 @@
-use rune::tok::{self, type_};
-use rune::{El, ScrollSpec, col, row, text};
+use rune::{El, ScrollSpec, col, el, row, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, Combobox, ComboboxOption, Field, Kit,
-    Progress, Slider, Switch, TextInput,
+    Badge, BadgeVariant, Button, ButtonVariant, Card, ColorPicker, Combobox, ComboboxOption,
+    Field, Hsv, Kit, Placement, Popover, Progress, ScrollBar, Slider, Switch,
 };
 use santhra_models::{Language, catalog, entry, model_dir, speech_language, speech_languages};
 
@@ -10,11 +9,10 @@ use crate::app::{
     DownloadStatus, FontChoice, Shared, State, cancel_download, leaked_family, model_ready,
     refresh_model, restart_session, start_download, toggle_overlay, use_model,
 };
-use crate::fonts;
-use crate::settings::{self, Settings};
+use crate::settings::{Settings, BACKGROUND_PRESETS};
 
 /// Scrollable settings pane body, inset from the section header.
-fn body(content: El) -> El {
+fn body(kit: &Kit, content: El) -> El {
     col()
         .key("settings-body")
         .grow(1.0)
@@ -27,6 +25,8 @@ fn body(content: El) -> El {
             stick_bottom: false,
         })
         .child(content)
+        // Wrap last: `.child` after `scroll_bar` would land in the wrapper, not the viewport.
+        .scroll_bar(kit)
 }
 
 fn two_columns(left: El, right: El) -> El {
@@ -44,7 +44,6 @@ pub(crate) fn recognition_body(
     kit: &Kit,
     overlays: &mut Vec<El>,
 ) -> El {
-    let t = tok::theme(true);
     let shared = Shared::get();
     let targets = {
         let mut guard = shared.targets.lock().unwrap();
@@ -139,9 +138,9 @@ pub(crate) fn recognition_body(
                 .gap(8.0)
                 .center_y()
                 .child(Badge::new(badge).variant(variant).build(kit))
-                .child(text(active_label).font(type_::BODY).color(t.text)),
+                .child(text(active_label).font(kit.ty.body).color(kit.c.text_base)),
         )
-        .child(text(status).font(type_::LABEL).color(t.text_secondary));
+        .child(text(status).font(kit.ty.small).color(kit.c.text_muted));
     if let Some(ratio) = progress {
         summary = summary.child(
             Progress::new(Some(ratio))
@@ -242,22 +241,22 @@ pub(crate) fn recognition_body(
 
     let choose_model = Card::new()
         .title("Choose model", None)
-        .child(labelled(kit, "Language", language_picker))
-        .child(labelled(kit, "Model", model_picker))
+        .child(Field::new().label("Language").control(language_picker).build(kit))
+        .child(Field::new().label("Model").control(model_picker).build(kit))
         .child(
             text(if needs_activate {
                 "Press Activate to use the selected model."
             } else {
                 "Changes apply immediately while listening."
             })
-            .font(type_::LABEL)
-            .color(t.text_secondary),
+            .font(kit.ty.small)
+            .color(kit.c.text_muted),
         )
         .build(kit);
 
     let audio = Card::new()
         .title("Audio", None)
-        .child(labelled(kit, "Audio source", source_picker))
+        .child(Field::new().label("Audio source").control(source_picker).build(kit))
         .child(
             row().child(
                 Button::new("Refresh model check")
@@ -270,6 +269,7 @@ pub(crate) fn recognition_body(
                 .range(1.0..=8.0)
                 .step(1.0)
                 .label("Threads")
+                .value_text(format!("{} threads", settings.threads))
                 .on_change(|s: &mut State, value, settled| set_threads(s, value, settled))
                 .build(kit),
         )
@@ -284,7 +284,7 @@ pub(crate) fn recognition_body(
         )
         .build(kit);
 
-    body(two_columns(
+    body(kit, two_columns(
         col()
             .grow(1.0)
             .min_w(0.0)
@@ -305,14 +305,26 @@ pub(crate) fn appearance_body(
     kit: &Kit,
     overlays: &mut Vec<El>,
 ) -> El {
-    let families = fonts::families();
     let current_font = settings.font_family.as_deref().unwrap_or("default");
     let mut font_options: Vec<ComboboxOption> =
         vec![ComboboxOption::new("default", "System default")];
-    for name in families {
-        font_options.push(ComboboxOption::new(name.clone(), name.clone()));
+    if s.font_combo.is_open() {
+        for fam in rune::text::installed_families() {
+            if fam.name().starts_with('.') {
+                continue;
+            }
+            let n = fam.weights().len();
+            let detail = if n == 1 {
+                "1 weight".to_owned()
+            } else {
+                format!("{n} weights")
+            };
+            let mut option = ComboboxOption::new(fam.name(), fam.name());
+            option.detail = detail;
+            font_options.push(option);
+        }
     }
-    if current_font != "default" && !families.iter().any(|name| name == current_font) {
+    if current_font != "default" && !font_options.iter().any(|o| o.id == current_font) {
         font_options.insert(1, ComboboxOption::new(current_font, current_font));
     }
     let font_picker = Combobox::new("font", &s.font_combo, &font_options, |s: &mut State| {
@@ -333,70 +345,103 @@ pub(crate) fn appearance_body(
     })
     .build(kit, overlays);
 
-    let mut background_options: Vec<ComboboxOption> = settings::BACKGROUND_PRESETS
-        .iter()
-        .map(|(name, hex)| ComboboxOption::new(*hex, *name))
-        .collect();
-    let current_background = settings.background_color.clone();
-    if !background_options
-        .iter()
-        .any(|option| option.id == current_background)
-    {
-        background_options.insert(0, ComboboxOption::new(current_background.clone(), "Custom"));
-    }
-    let background_picker = Combobox::new(
-        "background",
-        &s.background_combo,
-        &background_options,
-        |s: &mut State| &mut s.background_combo,
-    )
-    .label("Background")
-    .current(Some(current_background.as_str()))
-    .on_choose(|s, id, _| {
-        if let Some((_, value)) = settings::BACKGROUND_PRESETS
-            .iter()
-            .find(|(_, value)| *value == id)
-        {
-            set_background(s, value);
-        }
-    })
-    .build(kit, overlays);
+    let text_swatches: Vec<Hsv> = [
+        "#ffffff", "#cccccc", "#ffff00", "#ff9900", "#ff4444", "#44ff88",
+    ]
+    .iter()
+    .filter_map(|&c| Hsv::from_hex(c))
+    .collect();
 
-    let text_colour = Field::new()
+    let text_color_popover = Popover::new("text-color")
+        .trigger(color_trigger(s.text_hsv, kit, |s: &mut State| {
+            s.text_picker_open = !s.text_picker_open;
+            s.bg_picker_open = false;
+        }))
         .label("Text colour")
-        .control(
-            TextInput::new(&s.text_hex)
-                .label("Text colour")
-                .on_edit(|s: &mut State| {
-                    if valid_hex(&s.text_hex.text) {
-                        let hex = settings::to_hex(settings::parse_rgba(&s.text_hex.text));
-                        Shared::get().settings.lock().unwrap().text_color = hex;
-                        Shared::get().save_settings();
-                    }
-                    &mut s.text_hex
+        .open(s.text_picker_open)
+        .placement(Placement::BottomStart)
+        .on_close(|s: &mut State| {
+            s.text_picker_open = false;
+            Shared::get().save_settings();
+        })
+        .child(
+            ColorPicker::new(s.text_hsv)
+                .swatches(text_swatches)
+                .hex_field(&s.text_hex, |s: &mut State| &mut s.text_hex)
+                .on_change(|s: &mut State, hsv, _tx| {
+                    s.text_hsv = hsv;
+                    let shared = Shared::get();
+                    shared.settings.lock().unwrap().set_text_color(hsv);
+                    shared.publish();
                 })
                 .build(kit),
         )
+        .build(kit, overlays);
+
+    let text_colour_field = Field::new()
+        .label("Text colour")
+        .control(text_color_popover)
+        .build(kit);
+
+    let bg_swatches: Vec<Hsv> = BACKGROUND_PRESETS
+        .iter()
+        .filter_map(|(_, hex)| {
+            let raw = hex.trim_start_matches('#');
+            Hsv::from_hex(&format!("#{}", &raw[..raw.len().min(6)]))
+        })
+        .collect();
+
+    let bg_color_popover = Popover::new("bg-color")
+        .trigger(color_trigger(s.bg_hsv, kit, |s: &mut State| {
+            s.bg_picker_open = !s.bg_picker_open;
+            s.text_picker_open = false;
+        }))
+        .label("Background colour")
+        .open(s.bg_picker_open)
+        .placement(Placement::BottomStart)
+        .on_close(|s: &mut State| {
+            s.bg_picker_open = false;
+            Shared::get().save_settings();
+        })
+        .child(
+            ColorPicker::new(s.bg_hsv)
+                .swatches(bg_swatches)
+                .hex_field(&s.bg_hex, |s: &mut State| &mut s.bg_hex)
+                .on_change(|s: &mut State, hsv, _tx| {
+                    s.bg_hsv = hsv;
+                    let shared = Shared::get();
+                    shared.settings.lock().unwrap().set_background_color(hsv);
+                    shared.publish();
+                })
+                .build(kit),
+        )
+        .build(kit, overlays);
+
+    let bg_colour_field = Field::new()
+        .label("Background")
+        .control(bg_color_popover)
         .build(kit);
 
     let caption_text = Card::new()
         .title("Caption text", None)
-        .child(labelled(kit, "Font", font_picker))
+        .child(Field::new().label("Font").control(font_picker).build(kit))
         .child(
             Slider::new("font-size", settings.font_size)
                 .range(12.0..=72.0)
                 .step(1.0)
                 .label("Font size")
+                .value_text(format!("{:.0} pt", settings.font_size))
                 .on_change(|s: &mut State, value, settled| set_font_size(s, value, settled))
                 .build(kit),
         )
-        .child(text_colour)
-        .child(labelled(kit, "Background", background_picker))
+        .child(text_colour_field)
+        .child(bg_colour_field)
         .child(
             Slider::new("lines", settings.max_lines as f32)
                 .range(1.0..=5.0)
                 .step(1.0)
                 .label("Caption lines")
+                .value_text(format!("{} lines", settings.max_lines))
                 .on_change(|s: &mut State, value, settled| set_lines(s, value, settled))
                 .build(kit),
         )
@@ -442,6 +487,7 @@ pub(crate) fn appearance_body(
                 .range(0.1..=1.0)
                 .step(0.05)
                 .label("Opacity")
+                .value_text(format!("{:.0}%", settings.overlay_opacity * 100.0))
                 .on_change(|s: &mut State, value, settled| set_opacity(s, value, settled))
                 .build(kit),
         )
@@ -450,19 +496,43 @@ pub(crate) fn appearance_body(
                 .range(240.0..=1600.0)
                 .step(10.0)
                 .label("Width (on open)")
+                .value_text(format!("{:.0} px", settings.overlay_width))
                 .on_change(|s: &mut State, value, settled| set_width(s, value, settled))
                 .build(kit),
         )
         .build(kit);
 
-    body(two_columns(
+    body(kit, two_columns(
         col().grow(1.0).min_w(0.0).child(caption_text),
         col().grow(1.0).min_w(0.0).child(overlay),
     ))
 }
 
+fn color_trigger(hsv: Hsv, kit: &Kit, on_press: fn(&mut State)) -> El {
+    let swatch = hsv.to_color();
+    let hex = hsv.hex();
+    let border = kit.c.border_weak;
+    let muted = kit.c.text_muted;
+    let mono = kit.ty.mono;
+    Button::new(hex.clone())
+        .label_with(move |_ty, _ink| {
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(
+                    el()
+                        .size(14.0, 14.0)
+                        .radius(3.0)
+                        .fill(swatch)
+                        .border(1.0, border),
+                )
+                .child(text(hex.clone()).font(mono).color(muted))
+        })
+        .on_press(on_press)
+        .build(kit)
+}
+
 pub(crate) fn about_body(kit: &Kit) -> El {
-    let t = tok::theme(true);
     let mut licences = col().gap(4.0);
     for item in catalog() {
         licences = licences.child(
@@ -470,27 +540,27 @@ pub(crate) fn about_body(kit: &Kit) -> El {
                 "{} — {} ({})",
                 item.label, item.license, item.source
             ))
-            .font(type_::LABEL)
-            .color(t.text_secondary),
+            .font(kit.ty.small)
+            .color(kit.c.text_muted),
         );
     }
     let about = Card::new()
         .title("About", None)
-        .child(text("Santhra").font(type_::TITLE).color(t.text))
+        .child(text("Santhra").font(kit.ty.body_medium).color(kit.c.text_base))
         .child(
             text("Live system-audio captions with a floating overlay.")
-                .font(type_::BODY)
-                .color(t.text_secondary),
+                .font(kit.ty.body)
+                .color(kit.c.text_muted),
         )
         .child(
             text(format!("Config: {}", Settings::path().display()))
-                .font(type_::LABEL)
-                .color(t.text_secondary),
+                .font(kit.ty.small)
+                .color(kit.c.text_muted),
         )
         .child(
             text("Model, thread and overlay size changes apply on the next start/open.")
-                .font(type_::LABEL)
-                .color(t.text_secondary),
+                .font(kit.ty.small)
+                .color(kit.c.text_muted),
         )
         .child(
             if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -498,28 +568,15 @@ pub(crate) fn about_body(kit: &Kit) -> El {
             } else {
                 text("X11: always-on-top and overlay position are restored.")
             }
-            .font(type_::LABEL)
-            .color(t.text_secondary),
+            .font(kit.ty.small)
+            .color(kit.c.text_muted),
         )
         .build(kit);
     let licences = Card::new()
         .title("Model licences", None)
         .child(licences)
         .build(kit);
-    body(col().w_full().gap(16.0).child(about).child(licences))
-}
-
-fn labelled(kit: &Kit, label: &str, control: El) -> El {
-    col()
-        .gap(8.0)
-        .w_full()
-        .items_start()
-        .child(
-            text(label)
-                .font(kit.ty.ui_medium.lh(16.0))
-                .color(kit.c.text_base),
-        )
-        .child(control)
+    body(kit, col().w_full().gap(16.0).child(about).child(licences))
 }
 
 fn set_language(s: &mut State, id: &'static str) {
@@ -576,11 +633,6 @@ fn restart_if_listening(s: &mut State) {
     if s.session.is_some() && model_ready(&Shared::get().settings()) {
         restart_session(s);
     }
-}
-
-fn valid_hex(text: &str) -> bool {
-    let hex = text.trim().trim_start_matches('#');
-    matches!(hex.len(), 6 | 8) && u32::from_str_radix(hex, 16).is_ok()
 }
 
 fn persist(shared: &Shared, settled: bool) {
@@ -669,24 +721,5 @@ fn set_source(s: &mut State, name: Option<String>) {
     shared.save_settings();
     if s.session.is_some() {
         crate::app::restart_session(s);
-    }
-}
-
-fn set_background(_s: &mut State, value: &'static str) {
-    let shared = Shared::get();
-    shared.settings.lock().unwrap().background_color = value.to_owned();
-    shared.save_settings();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_only_parseable_hex_colours() {
-        assert!(valid_hex("#FFFFFFFF"));
-        assert!(valid_hex("101014E6"));
-        assert!(!valid_hex("#FFF"));
-        assert!(!valid_hex("#GGGGGGGG"));
     }
 }

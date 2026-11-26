@@ -4,14 +4,13 @@ use std::time::{Duration, Instant};
 
 use app_core::{Message, Session};
 use caption_core::CaptionSnapshot;
-use rune::tok::{self, type_};
 use rune::{
-    Color, Cx, El, Family, Icon, ScrollSpec, TextEdit, TextStyle, Tx, Waker, WindowHandle, col, el,
-    row, text,
+    Cx, El, Family, Icon, ScrollSpec, TextEdit, TextStyle, Tx, Waker, WindowHandle, col, row, text,
 };
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, ComboboxEvent, ComboboxState, Kit, Sidebar,
-    SidebarRow, SidebarSection, Switch, Toolbar, glyphs, root,
+    Badge, BadgeVariant, Button, ButtonVariant, ColorPicker, ComboboxEvent, ComboboxState, Hsv,
+    Kit, Loader, ScrollBar, Sidebar, SidebarRow, SidebarSection, Switch, Toolbar, glyphs, root,
+    shell::{PaneState, SplitView},
 };
 use speech_sherpa::ModelKind;
 
@@ -154,17 +153,30 @@ pub struct State {
     pub seen: usize,
     pub session: Option<Session>,
     pub status: String,
+    pub sidebar_pane: PaneState,
+    pub text_hsv: Hsv,
     pub text_hex: TextEdit,
+    pub text_picker_open: bool,
+    pub bg_hsv: Hsv,
+    pub bg_hex: TextEdit,
+    pub bg_picker_open: bool,
     pub font_combo: ComboboxState,
     pub source_combo: ComboboxState,
     pub language_combo: ComboboxState,
     pub model_combo: ComboboxState,
-    pub background_combo: ComboboxState,
 }
 
 impl State {
     pub fn new(id: &'static str) -> Self {
         let settings = Shared::get().settings();
+        let text_hsv = Hsv::from_hex(&settings.text_color_hex_no_alpha())
+            .unwrap_or_else(|| Hsv::from_hex("#ffffff").unwrap());
+        let bg_hsv = Hsv::from_hex(&settings.background_color_hex_no_alpha())
+            .unwrap_or_else(|| Hsv::from_hex("#101014").unwrap());
+        let mut text_hex = TextEdit::new(text_hsv.hex());
+        let mut bg_hex = TextEdit::new(bg_hsv.hex());
+        ColorPicker::sync_hex(&mut text_hex, text_hsv);
+        ColorPicker::sync_hex(&mut bg_hex, bg_hsv);
         State {
             id,
             section: Section::Captions,
@@ -172,12 +184,17 @@ impl State {
             seen: 0,
             session: None,
             status: "Idle".into(),
-            text_hex: TextEdit::new(settings.text_color.clone()),
+            sidebar_pane: PaneState::new(240.0),
+            text_hsv,
+            text_hex,
+            text_picker_open: false,
+            bg_hsv,
+            bg_hex,
+            bg_picker_open: false,
             font_combo: ComboboxState::default(),
             source_combo: ComboboxState::default(),
             language_combo: ComboboxState::default(),
             model_combo: ComboboxState::default(),
-            background_combo: ComboboxState::default(),
         }
     }
 }
@@ -347,8 +364,7 @@ pub fn refresh_model(s: &mut State) {
     let _ = s;
 }
 
-pub fn view_main(s: &State, _cx: &mut Cx<State>) -> El {
-    let t = tok::theme(true);
+pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
     let shared = Shared::get();
     let settings = shared.settings();
     let kit = Kit::neutral(true);
@@ -357,7 +373,6 @@ pub fn view_main(s: &State, _cx: &mut Cx<State>) -> El {
     let running = s.session.is_some();
     let model_ok = shared.model_ok.load(Ordering::Relaxed);
     let failed = !model_ok || s.status.starts_with("error") || s.status.starts_with("cannot");
-    let dot = status_dot(running, failed);
 
     let content = match s.section {
         Section::Captions => captions_body(s, shared, &settings, &kit),
@@ -370,44 +385,37 @@ pub fn view_main(s: &State, _cx: &mut Cx<State>) -> El {
         Section::About => crate::settings_view::about_body(&kit),
     };
 
-    let body = col()
-        .key("main")
-        .w_full()
-        .h_full()
-        .fill(t.bg)
-        .child(header(s, &kit, &t, dot))
-        .child(el().w_full().h(1.0).fill(t.separator))
-        .child(
-            row()
-                .grow(1.0)
-                .w_full()
-                .min_h(0.0)
-                .child(sidebar(s, &kit, &settings, running, model_ok))
-                .child(el().w(1.0).h_full().fill(t.separator))
-                .child(
-                    col()
-                        .key("content")
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .h_full()
-                        .pt(20.0)
-                        .child(content),
-                ),
-        );
-    root(body, overlays)
+    let toolbar = header(s, &kit, running, failed);
+    let sidebar_el = sidebar(s, &kit, &settings, running, model_ok);
+
+    let shell = SplitView::new(content)
+        .sidebar(&s.sidebar_pane, |s: &mut State| &mut s.sidebar_pane, sidebar_el)
+        .toolbar(toolbar)
+        .flat_main(true)
+        .titlebar_inset(cx.titlebar_inset())
+        .reduced_motion(cx.is_reduced_motion())
+        .build(&kit);
+
+    root(shell, overlays)
 }
 
-fn header(s: &State, kit: &Kit, t: &tok::Theme, dot: Color) -> El {
+fn header(s: &State, kit: &Kit, running: bool, failed: bool) -> Toolbar {
+    let status_indicator = if running {
+        Loader::new().size(14.0).color(kit.c.success.icon).build(kit)
+    } else if failed {
+        Badge::new("Error").variant(BadgeVariant::Neutral).build(kit)
+    } else {
+        Badge::new("Idle").variant(BadgeVariant::Subtle).build(kit)
+    };
     let status = row()
         .gap(8.0)
         .center_y()
-        .child(el().size(8.0, 8.0).radius(4.0).fill(dot))
-        .child(text(&s.status).font(type_::LABEL).color(t.text_secondary));
+        .child(status_indicator)
+        .child(text(&s.status).font(kit.ty.small).color(kit.c.text_muted));
     Toolbar::new()
-        .leading(text("Santhra").font(type_::TITLE).color(t.text))
+        .leading(text("Santhra").font(kit.ty.body_medium).color(kit.c.text_base))
         .title(section_title(s.section))
         .trailing(status)
-        .build(kit)
 }
 
 fn section_title(section: Section) -> &'static str {
@@ -419,33 +427,7 @@ fn section_title(section: Section) -> &'static str {
     }
 }
 
-fn status_dot(running: bool, failed: bool) -> Color {
-    if running {
-        Color {
-            r: 0.30,
-            g: 0.69,
-            b: 0.32,
-            a: 1.0,
-        }
-    } else if failed {
-        Color {
-            r: 0.85,
-            g: 0.20,
-            b: 0.20,
-            a: 1.0,
-        }
-    } else {
-        Color {
-            r: 0.50,
-            g: 0.50,
-            b: 0.50,
-            a: 1.0,
-        }
-    }
-}
-
 fn sidebar(s: &State, kit: &Kit, settings: &Settings, running: bool, model_ok: bool) -> El {
-    let t = tok::theme(true);
     let header = col()
         .w_full()
         .gap(10.0)
@@ -485,24 +467,16 @@ fn sidebar(s: &State, kit: &Kit, settings: &Settings, running: bool, model_ok: b
         )
         .child(
             text(format!("v{}", env!("CARGO_PKG_VERSION")))
-                .font(type_::LABEL)
-                .color(t.text_secondary),
+                .font(kit.ty.small)
+                .color(kit.c.text_muted),
         );
-    col()
-        .key("sidebar-col")
-        .w(240.0)
-        .h_full()
-        .min_w(0.0)
-        .fill(t.card)
-        .child(
-            Sidebar::new()
-                .label("Santhra")
-                .header(header)
-                .section(view_section(s, kit))
-                .section(settings_section(s, kit))
-                .footer(footer)
-                .build(kit),
-        )
+    Sidebar::new()
+        .label("Santhra")
+        .header(header)
+        .section(view_section(s, kit))
+        .section(settings_section(s, kit))
+        .footer(footer)
+        .build(kit)
 }
 
 fn view_section(s: &State, kit: &Kit) -> SidebarSection {
@@ -548,7 +522,6 @@ fn nav_row(label: &str, icon: &'static Icon, section: Section, s: &State, kit: &
 }
 
 fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> El {
-    let t = tok::theme(true);
     let snapshot = shared.snapshot.lock().unwrap().clone();
     let _ = s;
     let mut captions = col().w_full().gap(6.0);
@@ -559,13 +532,13 @@ fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> 
                 .items_start()
                 .child(
                     text("No captions yet.")
-                        .font(type_::BODY)
-                        .color(t.text_secondary),
+                        .font(kit.ty.body)
+                        .color(kit.c.text_muted),
                 )
                 .child(
                     text("Press Start, then play something.")
-                        .font(type_::LABEL)
-                        .color(t.text_secondary),
+                        .font(kit.ty.small)
+                        .color(kit.c.text_muted),
                 )
                 .child(
                     Button::new("Start")
@@ -592,28 +565,15 @@ fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> 
         .scroll(ScrollSpec { stick_bottom: true })
         .clip_rounded(0.0)
         .child(captions)
+        // Wrap last: `.child` after `scroll_bar` would land in the wrapper, not the viewport.
+        .scroll_bar(kit)
 }
 
 fn caption_line(content: &str, shared: &Shared, italic: bool, settings: &Settings) -> El {
     text(content.to_owned())
         .wrap()
         .font(shared.caption_style(italic))
-        .color(rgba(settings.text_rgba()))
-}
-
-pub fn rgba(rgba: [u8; 4]) -> Color {
-    Color {
-        r: f32::from(rgba[0]) / 255.0,
-        g: f32::from(rgba[1]) / 255.0,
-        b: f32::from(rgba[2]) / 255.0,
-        a: f32::from(rgba[3]) / 255.0,
-    }
-}
-
-pub fn background_rgba(settings: &Settings) -> Color {
-    let [r, g, b, a] = settings.background_rgba();
-    let a = (f32::from(a) * settings.overlay_opacity.clamp(0.1, 1.0)).round() as u8;
-    rgba([r, g, b, a])
+        .color(settings.text_color_value())
 }
 
 pub fn start_download(id: &str) {

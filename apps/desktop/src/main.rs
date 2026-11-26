@@ -1,10 +1,10 @@
 mod app;
-mod fonts;
 mod overlay;
 mod settings;
 mod settings_view;
 
-use rune::{AppSpec, Tx, WindowOptions, WindowSpec};
+use rune::{AppSpec, KeyEvent, Tx, WindowOptions, WindowSpec};
+use rune_kit::shell::is_sidebar_toggle;
 
 use app::{Shared, State};
 
@@ -28,6 +28,14 @@ fn main_spec() -> AppSpec<State> {
     AppSpec {
         setup: Some(app::setup),
         poll: Some(app::poll_main),
+        on_key: Some(|s: &mut State, ev: &KeyEvent, _tx: &mut Tx| {
+            if is_sidebar_toggle(ev) {
+                s.sidebar_pane.toggle();
+                true
+            } else {
+                false
+            }
+        }),
         scenes: &[
             ("captions", app::scene_captions),
             ("recognition", app::scene_recognition),

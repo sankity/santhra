@@ -155,15 +155,44 @@ impl Settings {
         }
     }
 
-    pub fn text_rgba(&self) -> [u8; 4] {
-        parse_rgba(&self.text_color)
+    /// The text colour as a linear [`rune::Color`], decoded from the stored `#rrggbb[aa]` hex.
+    pub fn text_color_value(&self) -> rune::Color {
+        rune::color::hex(&self.text_color).unwrap_or(rune::Color::WHITE)
     }
 
-    pub fn background_rgba(&self) -> [u8; 4] {
-        parse_rgba(&self.background_color)
+    /// The background colour with `overlay_opacity` folded into the alpha channel.
+    pub fn background_color_value(&self) -> rune::Color {
+        let c = rune::color::hex(&self.background_color)
+            .unwrap_or_else(|| rune::color::hex(BACKGROUND_PRESETS[0].1).unwrap());
+        c.alpha(c.a * self.overlay_opacity.clamp(0.1, 1.0))
+    }
+
+    pub fn text_color_hex_no_alpha(&self) -> String {
+        let raw = self.text_color.trim().trim_start_matches('#');
+        format!("#{}", &raw[..raw.len().min(6)])
+    }
+
+    pub fn background_color_hex_no_alpha(&self) -> String {
+        let raw = self.background_color.trim().trim_start_matches('#');
+        format!("#{}", &raw[..raw.len().min(6)])
+    }
+
+    pub fn set_text_color(&mut self, hsv: rune_kit::Hsv) {
+        self.text_color = hex_with_alpha(hsv, &self.text_color);
+    }
+
+    pub fn set_background_color(&mut self, hsv: rune_kit::Hsv) {
+        self.background_color = hex_with_alpha(hsv, &self.background_color);
     }
 }
 
+fn hex_with_alpha(hsv: rune_kit::Hsv, current: &str) -> String {
+    let [r, g, b] = hsv.to_srgb8();
+    let a = parse_rgba(current)[3];
+    format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+}
+
+/// Parse a `#rrggbb` or `#rrggbbaa` hex string into `[r, g, b, a]` bytes (sRGB, 0–255).
 pub fn parse_rgba(text: &str) -> [u8; 4] {
     let hex = text.trim().trim_start_matches('#');
     match (u32::from_str_radix(hex, 16), hex.len()) {
@@ -178,6 +207,7 @@ pub fn parse_rgba(text: &str) -> [u8; 4] {
     }
 }
 
+#[cfg(test)]
 pub fn to_hex(rgba: [u8; 4]) -> String {
     format!(
         "#{:02X}{:02X}{:02X}{:02X}",
@@ -227,9 +257,11 @@ mod tests {
 
     #[test]
     fn session_options_use_selected_whisper_language_code() {
-        let mut settings = Settings::default();
-        settings.language = Some("french".into());
-        settings.model_id = Some("whisper-tiny-multilingual".into());
+        let mut settings = Settings {
+            language: Some("french".into()),
+            model_id: Some("whisper-tiny-multilingual".into()),
+            ..Default::default()
+        };
         let options = settings.session_options();
         assert_eq!(options.language.as_deref(), Some("fr"));
 
@@ -295,6 +327,17 @@ model_kind = "paraformer-offline"
             );
             assert_eq!(parse_rgba(value)[3], 0xE6, "{name}");
         }
+    }
+
+    #[test]
+    fn colour_change_keeps_stored_alpha() {
+        let mut settings = Settings::default();
+        settings.set_text_color(rune_kit::Hsv::from_hex("#ff0000").unwrap());
+        assert_eq!(settings.text_color, "#FF0000FF");
+
+        settings.background_color = "#101014E6".into();
+        settings.set_background_color(rune_kit::Hsv::from_hex("#00ff00").unwrap());
+        assert_eq!(settings.background_color, "#00FF00E6");
     }
 
     #[test]

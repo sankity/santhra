@@ -1,6 +1,6 @@
 use rune::{Cx, El, ScrollSpec, col, el, text};
 
-use crate::app::{Shared, background_rgba, rgba};
+use crate::app::Shared;
 use crate::settings::Settings;
 
 pub fn view_overlay(_: &crate::app::State, _: &mut Cx<crate::app::State>) -> El {
@@ -14,7 +14,7 @@ pub fn view_overlay(_: &crate::app::State, _: &mut Cx<crate::app::State>) -> El 
             text("No captions yet.")
                 .wrap()
                 .font(shared.caption_style(false))
-                .color(rgba(settings.text_rgba())),
+                .color(settings.text_color_value()),
         );
     } else {
         for line in &snapshot.finals {
@@ -38,7 +38,7 @@ pub fn view_overlay(_: &crate::app::State, _: &mut Cx<crate::app::State>) -> El 
         .key("overlay")
         .w_full()
         .h_full()
-        .fill(background_rgba(&settings))
+        .fill(settings.background_color_value())
         .child(el().w_full().h_full().window_drag().child(scroll))
 }
 
@@ -46,5 +46,5 @@ fn caption(content: &str, shared: &Shared, settings: &Settings, italic: bool) ->
     text(content.to_owned())
         .wrap()
         .font(shared.caption_style(italic))
-        .color(rgba(settings.text_rgba()))
+        .color(settings.text_color_value())
 }
