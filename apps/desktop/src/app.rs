@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use app_core::{Message, Session};
 use caption_core::CaptionSnapshot;
 use rune::{
-    Cx, El, Family, Icon, ScrollSpec, TextEdit, TextStyle, Tx, Waker, WindowHandle, col, row, text,
+    Cx, El, Family, Icon, ScrollSpec, TextEdit, TextStyle, Tx, Waker, WindowHandle, col, el, row,
+    text,
 };
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ColorPicker, ComboboxEvent, ComboboxState, Hsv,
@@ -154,6 +155,7 @@ pub struct State {
     pub session: Option<Session>,
     pub status: String,
     pub sidebar_pane: PaneState,
+    pub auto_sidebar: bool,
     pub text_hsv: Hsv,
     pub text_hex: TextEdit,
     pub text_picker_open: bool,
@@ -185,6 +187,7 @@ impl State {
             session: None,
             status: "Idle".into(),
             sidebar_pane: PaneState::new(240.0),
+            auto_sidebar: false,
             text_hsv,
             text_hex,
             text_picker_open: false,
@@ -373,14 +376,15 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
     let running = s.session.is_some();
     let model_ok = shared.model_ok.load(Ordering::Relaxed);
     let failed = !model_ok || s.status.starts_with("error") || s.status.starts_with("cannot");
+    let narrow = cx.layout_with("split", |r| r[2] < 720.0).unwrap_or(false);
 
     let content = match s.section {
-        Section::Captions => captions_body(s, shared, &settings, &kit),
+        Section::Captions => captions_body(s, shared, &settings, &kit, narrow),
         Section::Recognition => {
-            crate::settings_view::recognition_body(s, &settings, &kit, &mut overlays)
+            crate::settings_view::recognition_body(s, &settings, &kit, &mut overlays, narrow)
         }
         Section::Appearance => {
-            crate::settings_view::appearance_body(s, &settings, &kit, &mut overlays)
+            crate::settings_view::appearance_body(s, &settings, &kit, &mut overlays, narrow)
         }
         Section::About => crate::settings_view::about_body(&kit),
     };
@@ -396,7 +400,13 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(&kit);
 
-    root(shell, overlays)
+    root(shell, overlays).on_layout_tx(|s: &mut State, r, _tx| {
+        let want_narrow = r[2] < 720.0;
+        if want_narrow != s.auto_sidebar {
+            s.auto_sidebar = want_narrow;
+            s.sidebar_pane.set_open(!want_narrow);
+        }
+    })
 }
 
 fn header(s: &State, kit: &Kit, running: bool, failed: bool) -> Toolbar {
@@ -405,13 +415,20 @@ fn header(s: &State, kit: &Kit, running: bool, failed: bool) -> Toolbar {
     } else if failed {
         Badge::new("Error").variant(BadgeVariant::Neutral).build(kit)
     } else {
-        Badge::new("Idle").variant(BadgeVariant::Subtle).build(kit)
+        el()
     };
     let status = row()
         .gap(8.0)
         .center_y()
         .child(status_indicator)
-        .child(text(&s.status).font(kit.ty.small).color(kit.c.text_muted));
+        .child(
+            text(&s.status)
+                .font(kit.ty.small)
+                .color(kit.c.text_muted)
+                .shrink()
+                .min_w(0.0)
+                .truncate(),
+        );
     Toolbar::new()
         .leading(text("Santhra").font(kit.ty.body_medium).color(kit.c.text_base))
         .title(section_title(s.section))
@@ -434,6 +451,7 @@ fn sidebar(s: &State, kit: &Kit, settings: &Settings, running: bool, model_ok: b
         .child(
             row()
                 .gap(8.0)
+                .flex_wrap()
                 .child(
                     Button::new("Start")
                         .variant(ButtonVariant::Contrast)
@@ -521,7 +539,7 @@ fn nav_row(label: &str, icon: &'static Icon, section: Section, s: &State, kit: &
         .build(kit)
 }
 
-fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> El {
+fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit, narrow: bool) -> El {
     let snapshot = shared.snapshot.lock().unwrap().clone();
     let _ = s;
     let mut captions = col().w_full().gap(6.0);
@@ -549,10 +567,10 @@ fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> 
         );
     } else {
         for line in &snapshot.finals {
-            captions = captions.child(caption_line(&line.text, shared, false, settings));
+            captions = captions.child(caption_line(&line.text, shared, false, settings, narrow));
         }
         if settings.show_partial && !snapshot.partial.is_empty() {
-            captions = captions.child(caption_line(&snapshot.partial, shared, true, settings));
+            captions = captions.child(caption_line(&snapshot.partial, shared, true, settings, narrow));
         }
     }
     col()
@@ -569,10 +587,20 @@ fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit) -> 
         .scroll_bar(kit)
 }
 
-fn caption_line(content: &str, shared: &Shared, italic: bool, settings: &Settings) -> El {
+fn caption_line(
+    content: &str,
+    shared: &Shared,
+    italic: bool,
+    settings: &Settings,
+    narrow: bool,
+) -> El {
+    let mut style = shared.caption_style(italic);
+    if narrow {
+        style.size = style.size.min(24.0);
+    }
     text(content.to_owned())
         .wrap()
-        .font(shared.caption_style(italic))
+        .font(style)
         .color(settings.text_color_value())
 }
 

@@ -26,6 +26,7 @@ fn main() {
 
 fn main_spec() -> AppSpec<State> {
     AppSpec {
+        min_size: Some((640.0, 480.0)),
         setup: Some(app::setup),
         poll: Some(app::poll_main),
         on_key: Some(|s: &mut State, ev: &KeyEvent, _tx: &mut Tx| {

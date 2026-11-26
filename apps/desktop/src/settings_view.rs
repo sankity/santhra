@@ -29,13 +29,18 @@ fn body(kit: &Kit, content: El) -> El {
         .scroll_bar(kit)
 }
 
-fn two_columns(left: El, right: El) -> El {
-    row()
-        .w_full()
-        .gap(16.0)
-        .items_start()
-        .child(left)
-        .child(right)
+fn two_columns(left: El, right: El, narrow: bool) -> El {
+    let columns = if narrow {
+        col().items_stretch()
+    } else {
+        row().items_start()
+    };
+    columns.w_full().gap(16.0).child(left).child(right)
+}
+
+fn column(narrow: bool) -> El {
+    let e = col().w_full().min_w(0.0).gap(16.0);
+    if narrow { e } else { e.grow(1.0) }
 }
 
 pub(crate) fn recognition_body(
@@ -43,6 +48,7 @@ pub(crate) fn recognition_body(
     settings: &Settings,
     kit: &Kit,
     overlays: &mut Vec<El>,
+    narrow: bool,
 ) -> El {
     let shared = Shared::get();
     let targets = {
@@ -100,7 +106,7 @@ pub(crate) fn recognition_body(
     let active_label = active.map(|item| item.label).unwrap_or("Legacy folder");
     let needs_activate = pending.is_some_and(|item| Some(item.id) != active.map(|a| a.id));
 
-    let mut actions = row().gap(8.0);
+    let mut actions = row().gap(8.0).flex_wrap();
     if !installed {
         actions = actions.child(
             Button::new("Download")
@@ -138,7 +144,14 @@ pub(crate) fn recognition_body(
                 .gap(8.0)
                 .center_y()
                 .child(Badge::new(badge).variant(variant).build(kit))
-                .child(text(active_label).font(kit.ty.body).color(kit.c.text_base)),
+                .child(
+                    text(active_label)
+                        .font(kit.ty.body)
+                        .color(kit.c.text_base)
+                        .shrink()
+                        .min_w(0.0)
+                        .truncate(),
+                ),
         )
         .child(text(status).font(kit.ty.small).color(kit.c.text_muted));
     if let Some(ratio) = progress {
@@ -285,17 +298,9 @@ pub(crate) fn recognition_body(
         .build(kit);
 
     body(kit, two_columns(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(16.0)
-            .child(summary.build(kit)),
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(16.0)
-            .child(choose_model)
-            .child(audio),
+        column(narrow).child(summary.build(kit)),
+        column(narrow).child(choose_model).child(audio),
+        narrow,
     ))
 }
 
@@ -304,6 +309,7 @@ pub(crate) fn appearance_body(
     settings: &Settings,
     kit: &Kit,
     overlays: &mut Vec<El>,
+    narrow: bool,
 ) -> El {
     let current_font = settings.font_family.as_deref().unwrap_or("default");
     let mut font_options: Vec<ComboboxOption> =
@@ -503,8 +509,9 @@ pub(crate) fn appearance_body(
         .build(kit);
 
     body(kit, two_columns(
-        col().grow(1.0).min_w(0.0).child(caption_text),
-        col().grow(1.0).min_w(0.0).child(overlay),
+        column(narrow).child(caption_text),
+        column(narrow).child(overlay),
+        narrow,
     ))
 }
 
