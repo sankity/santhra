@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -7,7 +8,9 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use pipewire as pw;
 use pw::properties::properties;
+use pw::stream::StreamState;
 use pw::spa;
+use serde_json::Value;
 use spa::param::audio::{AudioFormat, AudioInfoRaw};
 use spa::param::format::{MediaSubtype, MediaType};
 use spa::param::format_utils;
@@ -20,13 +23,125 @@ pub struct Capture {
     pub dropped: Arc<AtomicU64>,
 }
 
+/// What a capture stream listens to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// Default sink monitor (whole system mix).
+    Default,
+    /// A specific sink's monitor, by `node.name`.
+    Sink(String),
+    /// A single application stream, by `object.serial` (one browser tab, one app).
+    App(u32),
+}
+
+impl Target {
+    /// Decode the `settings.target` / CLI string form. Absent = default sink.
+    pub fn from_key(key: Option<&str>) -> Target {
+        match key {
+            None => Target::Default,
+            Some(key) => match key.strip_prefix("app:") {
+                Some(serial) => match serial.parse() {
+                    Ok(serial) => Target::App(serial),
+                    Err(_) => Target::Sink(key.to_owned()),
+                },
+                None => Target::Sink(key.to_owned()),
+            },
+        }
+    }
+
+    /// Encode back to the string form (`None` for the default sink).
+    pub fn key(&self) -> Option<String> {
+        match self {
+            Target::Default => None,
+            Target::Sink(name) => Some(name.clone()),
+            Target::App(serial) => Some(format!("app:{serial}")),
+        }
+    }
+
+    /// The sink this target captures; `None` for the default sink and app streams.
+    pub fn sink_name(&self) -> Option<&str> {
+        match self {
+            Target::Sink(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppStream {
+    pub serial: u32,
+    pub app: String,
+    pub title: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sink {
     pub name: String,
     pub description: String,
 }
 
-pub fn spawn(target: Option<String>, stop: Arc<AtomicBool>) -> Result<Capture> {
+#[derive(Clone, Debug, Default)]
+pub struct Targets {
+    pub sinks: Vec<Sink>,
+    pub apps: Vec<AppStream>,
+}
+
+/// Application streams as seen by pipewire-pulse. `pactl` exposes `media.name`
+/// (the tab title) next to `object.serial`; registry globals do not.
+fn list_apps() -> Vec<AppStream> {
+    let Ok(output) = Command::new("pactl")
+        .args(["-f", "json", "list", "sink-inputs"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_apps(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_apps(json: &str) -> Vec<AppStream> {
+    let Ok(items) = serde_json::from_str::<Vec<Value>>(json) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let props = item.get("properties");
+            let text = |key: &str| -> String {
+                props
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let serial = text("object.serial").parse::<u32>().ok()?;
+            let app = text("application.name");
+            let app = if app.is_empty() { text("node.name") } else { app };
+            if app.is_empty() {
+                return None;
+            }
+            Some(AppStream {
+                serial,
+                app,
+                title: text("media.name"),
+            })
+        })
+        .collect()
+}
+
+/// An app target that no longer exists falls back to the default sink.
+pub fn resolve_target(target: Target, apps: &[AppStream]) -> Target {
+    match target {
+        Target::App(serial) if apps.iter().any(|app| app.serial == serial) => Target::App(serial),
+        Target::App(_) => Target::Default,
+        other => other,
+    }
+}
+
+pub fn spawn(target: Target, stop: Arc<AtomicBool>) -> Result<Capture> {
+    let target = resolve_target(target, &list_targets().apps);
     let (tx, rx) = mpsc::sync_channel(QUEUE_CHUNKS);
     let dropped = Arc::new(AtomicU64::new(0));
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -50,7 +165,7 @@ pub fn spawn(target: Option<String>, stop: Arc<AtomicBool>) -> Result<Capture> {
 fn run(
     tx: mpsc::SyncSender<Vec<f32>>,
     dropped: Arc<AtomicU64>,
-    target: Option<String>,
+    target: Target,
     stop: Arc<AtomicBool>,
     ready: mpsc::Sender<Result<(), String>>,
 ) -> Result<(), pw::Error> {
@@ -64,16 +179,44 @@ fn run(
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::MEDIA_ROLE => "Music",
-        *pw::keys::STREAM_CAPTURE_SINK => "true",
     };
-    if let Some(target) = target {
-        props.insert(*pw::keys::TARGET_OBJECT, target);
+    // App targets need the stream state to report a vanished node: WirePlumber would
+    // otherwise silently fall back to the default source (the microphone).
+    let state_gated = matches!(target, Target::App(_));
+    match &target {
+        Target::Default => {
+            props.insert(*pw::keys::STREAM_CAPTURE_SINK, "true");
+        }
+        Target::Sink(name) => {
+            props.insert(*pw::keys::STREAM_CAPTURE_SINK, "true");
+            props.insert(*pw::keys::TARGET_OBJECT, name.as_str());
+        }
+        Target::App(serial) => {
+            props.insert(*pw::keys::TARGET_OBJECT, serial.to_string());
+            // No pipewire-rs constant for this key; set it literally.
+            props.insert("node.dont-fallback", "true");
+        }
     }
 
     let stream = pw::stream::StreamBox::new(&core, "santhra-capture", props)?;
 
+    let ready_state = ready.clone();
     let _listener = stream
         .add_local_listener_with_user_data(AudioInfoRaw::default())
+        .state_changed(move |_, _, _, new| {
+            if !state_gated {
+                return;
+            }
+            match new {
+                StreamState::Paused | StreamState::Streaming => {
+                    let _ = ready_state.send(Ok(()));
+                }
+                StreamState::Error(msg) => {
+                    let _ = ready_state.send(Err(msg.clone()));
+                }
+                _ => {}
+            }
+        })
         .param_changed(|_, info, id, param| {
             let Some(param) = param else { return };
             if id != spa::param::ParamType::Format.as_raw() {
@@ -132,7 +275,9 @@ fn run(
         &mut params,
     )?;
 
-    ready.send(Ok(())).ok();
+    if !state_gated {
+        ready.send(Ok(())).ok();
+    }
     while !stop.load(Ordering::Relaxed) {
         mainloop
             .loop_()
@@ -141,32 +286,38 @@ fn run(
     Ok(())
 }
 
-pub fn list_sinks() -> Vec<Sink> {
+/// Enumerate capture targets: sinks and application streams.
+pub fn list_targets() -> Targets {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(enumerate_sinks());
+        let _ = tx.send(enumerate_targets());
     });
     rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
 }
 
-fn enumerate_sinks() -> Vec<Sink> {
+/// Sinks only; kept for callers/tests that predate application streams.
+pub fn list_sinks() -> Vec<Sink> {
+    list_targets().sinks
+}
+
+fn enumerate_targets() -> Targets {
     let Ok(mainloop) = pw::main_loop::MainLoopRc::new(None) else {
-        return Vec::new();
+        return Targets::default();
     };
     let Ok(context) = pw::context::ContextRc::new(&mainloop, None) else {
-        return Vec::new();
+        return Targets::default();
     };
     let Ok(core) = context.connect_rc(None) else {
-        return Vec::new();
+        return Targets::default();
     };
     let Ok(registry) = core.get_registry() else {
-        return Vec::new();
+        return Targets::default();
     };
     let Ok(pending) = core.sync(0) else {
-        return Vec::new();
+        return Targets::default();
     };
 
-    let sinks = Rc::new(RefCell::new(Vec::new()));
+    let targets = Rc::new(RefCell::new(Targets::default()));
     let done = Rc::new(Cell::new(false));
 
     let _core_listener = core
@@ -186,29 +337,31 @@ fn enumerate_sinks() -> Vec<Sink> {
     let _registry_listener = registry
         .add_listener_local()
         .global({
-            let sinks = sinks.clone();
+            let targets = targets.clone();
             move |global| {
                 let Some(props) = global.props else { return };
-                if props.get(*pw::keys::MEDIA_CLASS) != Some("Audio/Sink") {
-                    return;
+                if let Some("Audio/Sink") = props.get(*pw::keys::MEDIA_CLASS) {
+                    let Some(name) = props.get(*pw::keys::NODE_NAME) else {
+                        return;
+                    };
+                    let description = props
+                        .get(*pw::keys::NODE_DESCRIPTION)
+                        .or_else(|| props.get(*pw::keys::NODE_NICK))
+                        .unwrap_or(name);
+                    targets.borrow_mut().sinks.push(Sink {
+                        name: name.to_string(),
+                        description: description.to_string(),
+                    });
                 }
-                let Some(name) = props.get(*pw::keys::NODE_NAME) else {
-                    return;
-                };
-                let description = props
-                    .get(*pw::keys::NODE_DESCRIPTION)
-                    .or_else(|| props.get(*pw::keys::NODE_NICK))
-                    .unwrap_or(name);
-                sinks.borrow_mut().push(Sink {
-                    name: name.to_string(),
-                    description: description.to_string(),
-                });
             }
         })
         .register();
 
     mainloop.run();
-    sinks.borrow().clone()
+    let mut targets = targets.borrow().clone();
+    let _ = done.get();
+    targets.apps = list_apps();
+    targets
 }
 
 pub fn to_mono(bytes: &[u8], channels: usize) -> Vec<f32> {
@@ -252,6 +405,56 @@ mod tests {
     }
 
     #[test]
+    fn target_key_roundtrip() {
+        assert_eq!(Target::from_key(None), Target::Default);
+        assert_eq!(Target::from_key(Some("default")), Target::Sink("default".into()));
+        assert_eq!(Target::key(&Target::Default), None);
+        for target in [Target::Sink("test-sink".into()), Target::App(645)] {
+            assert_eq!(Target::from_key(target.key().as_deref()), target);
+        }
+        assert_eq!(Target::App(645).key().as_deref(), Some("app:645"));
+        assert_eq!(Target::Sink("s".into()).sink_name(), Some("s"));
+        assert_eq!(Target::Default.sink_name(), None);
+    }
+
+    #[test]
+    fn parses_app_streams_from_pactl() {
+        let apps = parse_apps(
+            r#"[
+              {"index":405,"properties":{"node.name":"app-a","media.name":"audio-a"}},
+              {"index":1213,"properties":{"object.serial":"1213","application.name":"ExampleApp","media.name":"Example tab title"}},
+              {"index":1288,"properties":{"object.serial":"1288","node.name":"player","media.name":"clip"}}
+            ]"#,
+        );
+        assert_eq!(apps.len(), 2, "entries without object.serial are skipped");
+        assert_eq!(
+            apps[0],
+            AppStream {
+                serial: 1213,
+                app: "ExampleApp".into(),
+                title: "Example tab title".into(),
+            }
+        );
+        assert_eq!(apps[1].app, "player");
+    }
+
+    #[test]
+    fn resolve_missing_app_falls_back_to_default() {
+        let apps = vec![AppStream {
+            serial: 645,
+            app: "ExampleApp".into(),
+            title: "a".into(),
+        }];
+        assert_eq!(resolve_target(Target::App(645), &apps), Target::App(645));
+        assert_eq!(resolve_target(Target::App(999), &apps), Target::Default);
+        assert_eq!(
+            resolve_target(Target::Sink("s".into()), &apps),
+            Target::Sink("s".into())
+        );
+        assert_eq!(resolve_target(Target::Default, &apps), Target::Default);
+    }
+
+    #[test]
     #[ignore = "needs a running PipeWire session"]
     fn lists_sinks() {
         let sinks = list_sinks();
@@ -261,5 +464,28 @@ mod tests {
                 .iter()
                 .all(|sink| !sink.name.is_empty() && !sink.description.is_empty())
         );
+    }
+
+    #[test]
+    #[ignore = "needs a running PipeWire session"]
+    fn missing_app_target_falls_back_to_default_sink() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let capture = spawn(Target::App(u32::MAX), stop.clone()).expect("fallback to default sink");
+        stop.store(true, Ordering::Relaxed);
+        drop(capture);
+    }
+
+    #[test]
+    #[ignore = "needs a running PipeWire session with an app playing audio"]
+    fn captures_an_application_stream() {
+        let apps = list_targets().apps;
+        let Some(app) = apps.first() else {
+            eprintln!("no application stream playing; skipping");
+            return;
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let capture = spawn(Target::App(app.serial), stop.clone()).expect("capture app stream");
+        stop.store(true, Ordering::Relaxed);
+        drop(capture);
     }
 }

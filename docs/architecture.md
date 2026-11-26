@@ -4,7 +4,7 @@ Crates:
 
 | Crate | Owns |
 |---|---|
-| `audio-linux` | PipeWire capture (system audio), sink enumeration |
+| `audio-linux` | PipeWire capture, sink + application-stream enumeration |
 | `speech-sherpa` | sherpa-onnx model loading and streaming transcription |
 | `caption-core` | caption state: partial text + last N finals, events |
 | `app-core` | capture + ASR threads, session lifecycle, messages |
@@ -12,7 +12,7 @@ Crates:
 Live path:
 
 ```text
-default sink input (PipeWire, stream.capture.sink=true)
+target (default sink monitor, a named sink monitor, or one app stream by object.serial)
   -> audio-linux capture thread: F32LE/16 kHz/mono negotiated by the graph
   -> bounded channel (64 x 100 ms)          drop + count on overflow
   -> app-core ASR thread: speech-sherpa OnlineRecognizer (greedy, endpointing on)

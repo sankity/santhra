@@ -42,8 +42,15 @@ Other CLI entry points:
 
 ```bash
 cargo run -p santhra-cli -- live --target <sink-name>   # capture a specific sink
+cargo run -p santhra-cli -- live --target app:<serial>  # capture one application stream (one browser tab)
 cargo run -p santhra-cli -- transcribe path/to/file.wav  # transcribe a 16 kHz mono WAV
 ```
+
+`--target app:<serial>` captures a single PipeWire application stream, so two browser tabs that
+each play audio can be captioned separately (browsers typically expose one stream per tab).
+Find the serial with `pw-dump` or the desktop app's Audio source list, where each app is labelled
+`App — tab title`. If the stream is gone by the time listening starts, Santhra falls back to the
+default sink.
 
 Useful flags: `--no-partial` (final segments only), `--max-lines <n>`, `--model-dir <path>`,
 `--threads <n>`, `--language <language-id>` (from the Settings language list), `--model <id>`,

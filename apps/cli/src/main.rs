@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use app_core::{Message, Session, SessionOptions};
+use audio_linux::Target;
 use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
 use clap::{Args, Parser, Subcommand};
 use santhra_download::{Progress, download_all};
@@ -58,7 +59,7 @@ enum Command {
     Live {
         #[arg(
             long,
-            help = "Sink node name or serial; default is the default sink's audio"
+            help = "Sink node name or app:<object.serial>; default is the default sink's audio"
         )]
         target: Option<String>,
         #[command(flatten)]
@@ -195,7 +196,7 @@ impl Common {
 
     fn session_options(&self, target: Option<String>) -> Result<SessionOptions> {
         Ok(SessionOptions {
-            target,
+            target: Target::from_key(target.as_deref()),
             model_dir: self.model_dir()?,
             model_kind: self.model_kind().as_str().to_owned(),
             buffer_ms: self.buffer_ms,

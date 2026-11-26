@@ -43,7 +43,7 @@ pub struct Shared {
     pub revision: AtomicUsize,
     pub wakers: Mutex<Vec<(&'static str, Waker)>>,
     pub overlay: Mutex<Option<WindowHandle>>,
-    pub sinks: Mutex<Option<Vec<audio_linux::Sink>>>,
+    pub targets: Mutex<Option<audio_linux::Targets>>,
     pub model_ok: AtomicBool,
     pub running: AtomicBool,
     pub font: Mutex<FontChoice>,
@@ -68,7 +68,7 @@ impl Shared {
                 revision: AtomicUsize::new(0),
                 wakers: Mutex::new(Vec::new()),
                 overlay: Mutex::new(None),
-                sinks: Mutex::new(None),
+                targets: Mutex::new(None),
                 model_ok: AtomicBool::new(model_ok),
                 running: AtomicBool::new(false),
                 repaint_until: Mutex::new(None),
@@ -294,8 +294,14 @@ pub fn start_session(s: &mut State) {
     }
     match Session::start(settings.session_options()) {
         Ok(session) => {
+            let label = session.source_label().to_owned();
+            let note = if session.fell_back() {
+                " (source not found)"
+            } else {
+                ""
+            };
+            s.status = format!("Listening — {label}{note}");
             s.session = Some(session);
-            s.status = "Listening".into();
             Shared::get().running.store(true, Ordering::Relaxed);
         }
         Err(err) => {
@@ -304,6 +310,13 @@ pub fn start_session(s: &mut State) {
         }
     }
     Shared::get().wake();
+}
+
+/// Re-apply the saved source by restarting the session. `Session::drop` stops capture
+/// and joins the ASR thread, so the old stream is gone before the new one starts.
+pub fn restart_session(s: &mut State) {
+    drop(s.session.take());
+    start_session(s);
 }
 
 pub fn stop_session(s: &mut State) {
@@ -325,7 +338,7 @@ pub fn refresh_model(s: &mut State) {
     let settings = shared.settings();
     let ok = model_ready(&settings);
     shared.model_ok.store(ok, Ordering::Relaxed);
-    *shared.sinks.lock().unwrap() = Some(audio_linux::list_sinks());
+    *shared.targets.lock().unwrap() = Some(audio_linux::list_targets());
     shared.publish();
     let _ = s;
 }
@@ -521,7 +534,12 @@ fn nav_row(label: &str, icon: &'static Icon, section: Section, s: &State, kit: &
     SidebarRow::new(label)
         .icon(icon)
         .selected(s.section == section)
-        .on_select(move |s: &mut State, _: &mut Tx| s.section = section)
+        .on_select(move |s: &mut State, _: &mut Tx| {
+            if section == Section::Recognition {
+                *Shared::get().targets.lock().unwrap() = Some(audio_linux::list_targets());
+            }
+            s.section = section;
+        })
         .build(kit)
 }
 

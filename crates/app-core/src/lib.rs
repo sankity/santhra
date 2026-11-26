@@ -4,12 +4,13 @@ use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use anyhow::Result;
+use audio_linux::{AppStream, Target};
 use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
 use speech_sherpa::{AsrOptions, ModelFiles, ModelKind, Transcriber};
 
 #[derive(Clone, Debug)]
 pub struct SessionOptions {
-    pub target: Option<String>,
+    pub target: Target,
     pub model_dir: PathBuf,
     pub model_kind: String,
     pub buffer_ms: u32,
@@ -30,12 +31,38 @@ pub struct Session {
     rx: mpsc::Receiver<Message>,
     stop: Arc<AtomicBool>,
     asr: Option<JoinHandle<()>>,
+    source_label: String,
+    fell_back: bool,
 }
 
 impl Session {
+    /// The source actually captured, for display in the UI.
+    pub fn source_label(&self) -> &str {
+        &self.source_label
+    }
+
+    /// True when the requested app stream was gone and the default sink was used instead.
+    pub fn fell_back(&self) -> bool {
+        self.fell_back
+    }
+
     pub fn start(opts: SessionOptions) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
-        let capture = audio_linux::spawn(opts.target.clone(), stop.clone())?;
+        let apps = audio_linux::list_targets().apps;
+        let mut target = audio_linux::resolve_target(opts.target.clone(), &apps);
+        let mut fell_back = target != opts.target;
+
+        let capture = match audio_linux::spawn(target.clone(), stop.clone()) {
+            Ok(capture) => capture,
+            // The app stream vanished after resolution: fall back to the default sink.
+            Err(_) if matches!(target, Target::App(_)) => {
+                fell_back = true;
+                target = Target::Default;
+                audio_linux::spawn(target.clone(), stop.clone())?
+            }
+            Err(err) => return Err(err),
+        };
+        let source_label = label_for(&target, &apps);
         let dropped = capture.dropped.clone();
         let (tx, rx) = mpsc::channel();
 
@@ -91,6 +118,8 @@ impl Session {
             rx,
             stop,
             asr: Some(asr),
+            source_label,
+            fell_back,
         })
     }
 
@@ -107,11 +136,54 @@ impl Session {
     }
 }
 
+fn label_for(target: &Target, apps: &[AppStream]) -> String {
+    match target {
+        Target::Default => "Default sink".into(),
+        Target::Sink(name) => name.clone(),
+        Target::App(serial) => {
+            let label = apps
+                .iter()
+                .find(|app| app.serial == *serial)
+                .map(|app| {
+                    if app.title.is_empty() {
+                        app.app.clone()
+                    } else {
+                        format!("{} — {}", app.app, app.title)
+                    }
+                })
+                .unwrap_or_else(|| format!("app:{serial}"));
+            if label.chars().count() > 52 {
+                format!("{}…", label.chars().take(51).collect::<String>())
+            } else {
+                label
+            }
+        }
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.asr.take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_label_uses_tab_title_or_sink_name() {
+        let apps = vec![AppStream {
+            serial: 7,
+            app: "ExampleApp".into(),
+            title: "A tab".into(),
+        }];
+        assert_eq!(label_for(&Target::Default, &apps), "Default sink");
+        assert_eq!(label_for(&Target::Sink("sink".into()), &apps), "sink");
+        assert_eq!(label_for(&Target::App(7), &apps), "ExampleApp — A tab");
+        assert_eq!(label_for(&Target::App(9), &apps), "app:9");
     }
 }

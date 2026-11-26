@@ -7,8 +7,8 @@ use rune_kit::{
 use santhra_models::{Language, catalog, entry, model_dir, speech_language, speech_languages};
 
 use crate::app::{
-    DownloadStatus, FontChoice, Shared, State, cancel_download, leaked_family, refresh_model,
-    start_download, toggle_overlay, use_model,
+    DownloadStatus, FontChoice, Shared, State, cancel_download, leaked_family, model_ready,
+    refresh_model, restart_session, start_download, toggle_overlay, use_model,
 };
 use crate::fonts;
 use crate::settings::{self, Settings};
@@ -46,10 +46,10 @@ pub(crate) fn recognition_body(
 ) -> El {
     let t = tok::theme(true);
     let shared = Shared::get();
-    let sinks = {
-        let mut guard = shared.sinks.lock().unwrap();
+    let targets = {
+        let mut guard = shared.targets.lock().unwrap();
         if guard.is_none() {
-            *guard = Some(audio_linux::list_sinks());
+            *guard = Some(audio_linux::list_targets());
         }
         guard.clone().unwrap_or_default()
     };
@@ -201,14 +201,22 @@ pub(crate) fn recognition_body(
     .build(kit, overlays);
 
     let mut source_options = vec![ComboboxOption::new("default", "Default sink")];
-    for sink in &sinks {
+    for sink in &targets.sinks {
         source_options.push(ComboboxOption::new(
             sink.name.clone(),
             sink.description.clone(),
         ));
     }
+    for app in &targets.apps {
+        let label = if app.title.is_empty() {
+            app.app.clone()
+        } else {
+            format!("{} — {}", app.app, app.title)
+        };
+        source_options.push(ComboboxOption::new(format!("app:{}", app.serial), label));
+    }
     if let Some(current) = settings.target.as_deref()
-        && !sinks.iter().any(|sink| sink.name == current)
+        && !source_options.iter().any(|option| option.id == current)
     {
         source_options.push(ComboboxOption::new(current.to_owned(), current.to_owned()));
     }
@@ -240,7 +248,7 @@ pub(crate) fn recognition_body(
             text(if needs_activate {
                 "Press Activate to use the selected model."
             } else {
-                "Changes to the active model apply on the next Start."
+                "Changes apply immediately while listening."
             })
             .font(type_::LABEL)
             .color(t.text_secondary),
@@ -540,6 +548,7 @@ fn set_language(s: &mut State, id: &'static str) {
     }
     s.pending_model = None;
     shared.save_settings();
+    restart_if_listening(s);
 }
 
 fn select_model(s: &mut State, id: &'static str) {
@@ -566,6 +575,15 @@ fn activate_selected(s: &mut State) {
     let id = target_model(s).id;
     use_model(id);
     s.pending_model = None;
+    restart_if_listening(s);
+}
+
+/// Re-apply settings to a running ASR session. Skip when the new model is not installed,
+/// so a waiting download does not kill the session that is currently captioning.
+fn restart_if_listening(s: &mut State) {
+    if s.session.is_some() && model_ready(&Shared::get().settings()) {
+        restart_session(s);
+    }
 }
 
 fn valid_hex(text: &str) -> bool {
@@ -659,10 +677,13 @@ fn set_font(_s: &mut State, name: Option<String>) {
     shared.save_settings();
 }
 
-fn set_source(_s: &mut State, name: Option<String>) {
+fn set_source(s: &mut State, name: Option<String>) {
     let shared = Shared::get();
     shared.settings.lock().unwrap().target = name;
     shared.save_settings();
+    if s.session.is_some() {
+        crate::app::restart_session(s);
+    }
 }
 
 fn set_background(_s: &mut State, value: &'static str) {

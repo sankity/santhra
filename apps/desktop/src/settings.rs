@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use audio_linux::Target;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
@@ -144,7 +145,7 @@ impl Settings {
             .and_then(santhra_models::whisper_language_code)
             .map(str::to_owned);
         app_core::SessionOptions {
-            target: self.target.clone(),
+            target: Target::from_key(self.target.as_deref()),
             model_dir,
             model_kind,
             buffer_ms: self.buffer_ms,
@@ -205,6 +206,15 @@ mod tests {
         settings.save_to(&path).expect("save");
         assert_eq!(Settings::load_from(&path), settings);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_options_map_target() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.session_options().target, Target::Default);
+
+        settings.target = Some("app:645".into());
+        assert_eq!(settings.session_options().target, Target::App(645));
     }
 
     #[test]
