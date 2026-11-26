@@ -281,7 +281,11 @@ pub fn poll_readonly(s: &mut State, _: f64, tx: &mut rune::Tx) -> bool {
     if repainting || shared.running.load(Ordering::Relaxed) {
         tx.wake_after(Duration::from_millis(100));
     }
-    seen_revision(s)
+    let changed = seen_revision(s);
+    if changed {
+        tx.instant();
+    }
+    changed
 }
 
 pub fn start_session(s: &mut State) {

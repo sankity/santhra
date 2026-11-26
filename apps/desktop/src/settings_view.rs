@@ -453,14 +453,6 @@ pub(crate) fn appearance_body(
                 .on_change(|s: &mut State, value, settled| set_width(s, value, settled))
                 .build(kit),
         )
-        .child(
-            Slider::new("height", settings.overlay_height)
-                .range(80.0..=600.0)
-                .step(10.0)
-                .label("Height (on open)")
-                .on_change(|s: &mut State, value, settled| set_height(s, value, settled))
-                .build(kit),
-        )
         .build(kit);
 
     body(two_columns(
@@ -620,12 +612,6 @@ fn set_opacity(_s: &mut State, value: f32, settled: bool) {
 fn set_width(_s: &mut State, value: f32, settled: bool) {
     let shared = Shared::get();
     shared.settings.lock().unwrap().overlay_width = value;
-    persist(shared, settled);
-}
-
-fn set_height(_s: &mut State, value: f32, settled: bool) {
-    let shared = Shared::get();
-    shared.settings.lock().unwrap().overlay_height = value;
     persist(shared, settled);
 }
 

@@ -13,9 +13,11 @@ it honours.
 | Always-on-top | **no** (`set_window_level` is a no-op) | yes |
 | Restore position | **no** (no window-position protocol) | yes |
 
-Overlay width and height are configured in Settings and applied when the overlay opens. They are
-not applied live: Rune has no interactive-resize API and this compositor ignores client-requested
-Wayland resizes. Changing either value takes effect after closing and reopening the overlay.
+Overlay width is configured in Settings and applied when the overlay opens. The height is not
+configured: Rune fits it to the caption content as lines are added or removed. Width is not applied
+live (Rune has no interactive-resize API and this compositor ignores client-requested Wayland
+resizes); reopen the overlay after changing it. A compositor that ignores client resizes cannot
+follow the fitted height either.
 
 Verified on Umbriel/Wayland with Rune. The settings window
 warns about the two Wayland gaps when `WAYLAND_DISPLAY` is set.

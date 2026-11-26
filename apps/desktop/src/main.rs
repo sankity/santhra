@@ -55,7 +55,7 @@ fn overlay_spec() -> WindowSpec<State> {
         scenes: &[("captions", app::scene_captions)],
         ..AppSpec::new(
             "Santhra captions",
-            (settings.overlay_width, settings.overlay_height),
+            (settings.overlay_width, 180.0),
             || State::new("overlay"),
             overlay::view_overlay,
         )

@@ -42,7 +42,6 @@ pub struct Settings {
     pub overlay_click_through: bool,
     pub overlay_opacity: f32,
     pub overlay_width: f32,
-    pub overlay_height: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_pos: Option<[f32; 2]>,
 }
@@ -69,7 +68,6 @@ impl Default for Settings {
             overlay_click_through: false,
             overlay_opacity: 0.85,
             overlay_width: 720.0,
-            overlay_height: 180.0,
             overlay_pos: None,
         }
     }

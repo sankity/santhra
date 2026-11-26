@@ -1,4 +1,4 @@
-use rune::{Cx, El, col, el, text};
+use rune::{Cx, El, ScrollSpec, col, el, text};
 
 use crate::app::{Shared, background_rgba, rgba};
 use crate::settings::Settings;
@@ -8,13 +8,7 @@ pub fn view_overlay(_: &crate::app::State, _: &mut Cx<crate::app::State>) -> El 
     let settings = shared.settings();
     let snapshot = shared.snapshot.lock().unwrap().clone();
 
-    let mut body = col()
-        .w_full()
-        .h_full()
-        .padding(12.0)
-        .gap(6.0)
-        .justify_end()
-        .clip_rounded(0.0);
+    let mut body = col().w_full().padding(12.0).gap(6.0);
     if snapshot.finals.is_empty() && snapshot.partial.is_empty() {
         body = body.child(
             text("No captions yet.")
@@ -31,12 +25,21 @@ pub fn view_overlay(_: &crate::app::State, _: &mut Cx<crate::app::State>) -> El 
         }
     }
 
+    let scroll = col()
+        .key("overlay-scroll")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .scroll(ScrollSpec::stick_bottom())
+        .clip_rounded(0.0)
+        .child(body);
+
     col()
         .key("overlay")
         .w_full()
         .h_full()
         .fill(background_rgba(&settings))
-        .child(el().w_full().h_full().window_drag().child(body))
+        .child(el().w_full().h_full().window_drag().child(scroll))
 }
 
 fn caption(content: &str, shared: &Shared, settings: &Settings, italic: bool) -> El {
