@@ -393,7 +393,11 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
     let sidebar_el = sidebar(s, &kit, &settings, running, model_ok);
 
     let shell = SplitView::new(content)
-        .sidebar(&s.sidebar_pane, |s: &mut State| &mut s.sidebar_pane, sidebar_el)
+        .sidebar(
+            &s.sidebar_pane,
+            |s: &mut State| &mut s.sidebar_pane,
+            sidebar_el,
+        )
         .toolbar(toolbar)
         .flat_main(true)
         .titlebar_inset(cx.titlebar_inset())
@@ -411,26 +415,31 @@ pub fn view_main(s: &State, cx: &mut Cx<State>) -> El {
 
 fn header(s: &State, kit: &Kit, running: bool, failed: bool) -> Toolbar {
     let status_indicator = if running {
-        Loader::new().size(14.0).color(kit.c.success.icon).build(kit)
+        Loader::new()
+            .size(14.0)
+            .color(kit.c.success.icon)
+            .build(kit)
     } else if failed {
-        Badge::new("Error").variant(BadgeVariant::Neutral).build(kit)
+        Badge::new("Error")
+            .variant(BadgeVariant::Neutral)
+            .build(kit)
     } else {
         el()
     };
-    let status = row()
-        .gap(8.0)
-        .center_y()
-        .child(status_indicator)
-        .child(
-            text(&s.status)
-                .font(kit.ty.small)
-                .color(kit.c.text_muted)
-                .shrink()
-                .min_w(0.0)
-                .truncate(),
-        );
+    let status = row().gap(8.0).center_y().child(status_indicator).child(
+        text(&s.status)
+            .font(kit.ty.small)
+            .color(kit.c.text_muted)
+            .shrink()
+            .min_w(0.0)
+            .truncate(),
+    );
     Toolbar::new()
-        .leading(text("Santhra").font(kit.ty.body_medium).color(kit.c.text_base))
+        .leading(
+            text("Santhra")
+                .font(kit.ty.body_medium)
+                .color(kit.c.text_base),
+        )
         .title(section_title(s.section))
         .trailing(status)
 }
@@ -570,7 +579,13 @@ fn captions_body(s: &State, shared: &Shared, settings: &Settings, kit: &Kit, nar
             captions = captions.child(caption_line(&line.text, shared, false, settings, narrow));
         }
         if settings.show_partial && !snapshot.partial.is_empty() {
-            captions = captions.child(caption_line(&snapshot.partial, shared, true, settings, narrow));
+            captions = captions.child(caption_line(
+                &snapshot.partial,
+                shared,
+                true,
+                settings,
+                narrow,
+            ));
         }
     }
     col()

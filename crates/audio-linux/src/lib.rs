@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use pipewire as pw;
 use pw::properties::properties;
-use pw::stream::StreamState;
 use pw::spa;
+use pw::stream::StreamState;
 use serde_json::Value;
 use spa::param::audio::{AudioFormat, AudioInfoRaw};
 use spa::param::format::{MediaSubtype, MediaType};
@@ -118,7 +118,11 @@ fn parse_apps(json: &str) -> Vec<AppStream> {
             };
             let serial = text("object.serial").parse::<u32>().ok()?;
             let app = text("application.name");
-            let app = if app.is_empty() { text("node.name") } else { app };
+            let app = if app.is_empty() {
+                text("node.name")
+            } else {
+                app
+            };
             if app.is_empty() {
                 return None;
             }
@@ -407,7 +411,10 @@ mod tests {
     #[test]
     fn target_key_roundtrip() {
         assert_eq!(Target::from_key(None), Target::Default);
-        assert_eq!(Target::from_key(Some("default")), Target::Sink("default".into()));
+        assert_eq!(
+            Target::from_key(Some("default")),
+            Target::Sink("default".into())
+        );
         assert_eq!(Target::key(&Target::Default), None);
         for target in [Target::Sink("test-sink".into()), Target::App(645)] {
             assert_eq!(Target::from_key(target.key().as_deref()), target);

@@ -5,7 +5,15 @@ use anyhow::{Context, Result};
 use audio_linux::Target;
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
+/// Fallback only; the default model is resolved against the data dir so the app works when
+/// launched from a `.desktop` file (CWD = `$HOME`).
+const LEGACY_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
+
+fn default_model_dir() -> String {
+    santhra_models::model_dir("zipformer-en-20m")
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_else(|_| LEGACY_MODEL_DIR.into())
+}
 
 pub const BACKGROUND_PRESETS: [(&str, &str); 8] = [
     ("Dark", "#101014E6"),
@@ -50,7 +58,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             target: None,
-            model_dir: DEFAULT_MODEL_DIR.into(),
+            model_dir: default_model_dir(),
             language: Some("english".into()),
             model_id: Some("zipformer-en-20m".into()),
             model_kind: Some("zipformer".into()),
@@ -92,25 +100,51 @@ impl Settings {
             .ok()
             .and_then(|text| toml::from_str(&text).ok())
             .unwrap_or_default();
+        settings.normalize();
+        settings
+    }
 
-        if settings
+    /// Repair configs written by older builds: unknown language, stale model id, and a
+    /// CWD-relative `models/...` directory.
+    fn normalize(&mut self) {
+        if self
             .language
             .as_deref()
             .is_some_and(|language| santhra_models::speech_language(language).is_none())
         {
-            settings.language = Some("english".into());
-            let model = settings.model_id.as_deref().and_then(santhra_models::entry);
-            if model.is_none_or(|model| !santhra_models::matches_language_id(model, "english"))
-                && let Some(default) = santhra_models::default_for_id("english")
-            {
-                settings.model_id = Some(default.id.into());
-                settings.model_kind = Some(default.kind.as_str().into());
-                settings.model_dir = santhra_models::model_dir(default.id)
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or(settings.model_dir);
-            }
+            self.language = Some("english".into());
         }
-        settings
+
+        let language = self.language.clone().unwrap_or_else(|| "english".into());
+        let selected = self.model_id.as_deref().and_then(santhra_models::entry);
+
+        if selected.is_some_and(|model| santhra_models::matches_language_id(model, &language)) {
+            if let Some(id) = selected.map(|model| model.id)
+                && let Ok(dir) = santhra_models::model_dir(id)
+            {
+                self.model_dir = dir.display().to_string();
+            }
+        } else if self.model_id.is_some() {
+            // Stale or unknown model id: fall back to the default for the selected language.
+            if let Some(default) = santhra_models::default_for_id(&language) {
+                let dir = santhra_models::model_dir(default.id)
+                    .map(|dir| dir.display().to_string())
+                    .unwrap_or_else(|_| self.model_dir.clone());
+                self.model_id = Some(default.id.into());
+                self.model_kind = Some(default.kind.as_str().into());
+                self.model_dir = dir;
+            }
+        } else if Path::new(&self.model_dir).is_relative() {
+            // Legacy config with no model id: the old default was relative to the CWD.
+            let name = Path::new(&self.model_dir)
+                .file_name()
+                .map(|name| name.to_owned())
+                .unwrap_or_default();
+            self.model_dir = santhra_models::models_root()
+                .join(name)
+                .display()
+                .to_string();
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -346,5 +380,102 @@ model_kind = "paraformer-offline"
         assert_eq!(parse_rgba("00FF00"), [0, 255, 0, 255]);
         assert_eq!(parse_rgba("oops"), [255, 255, 255, 255]);
         assert_eq!(to_hex([255, 0, 0, 128]), "#FF000080");
+    }
+
+    fn write_config(name: &str, body: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("santhra-{name}-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        fs::write(&path, body).expect("write config");
+        (dir, path)
+    }
+
+    #[test]
+    fn valid_language_with_stale_model_id_is_repaired() {
+        let (dir, path) = write_config(
+            "stale-model",
+            r#"language = "english"
+model_id = "paraformer-zh-offline"
+model_kind = "paraformer-offline"
+model_dir = "models/paraformer-zh-offline"
+"#,
+        );
+
+        let settings = Settings::load_from(&path);
+        assert_eq!(settings.language.as_deref(), Some("english"));
+        assert_eq!(settings.model_id.as_deref(), Some("zipformer-en-20m"));
+        assert_eq!(settings.model_kind.as_deref(), Some("zipformer"));
+        assert_eq!(
+            settings.model_dir,
+            santhra_models::model_dir("zipformer-en-20m")
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn default_config_resolves_model_dir_from_data_dir() {
+        let dir = std::env::temp_dir().join(format!("santhra-data-dir-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let settings = Settings::load_from(&path);
+
+        assert!(Path::new(&settings.model_dir).is_absolute());
+        assert_eq!(
+            settings.model_dir,
+            santhra_models::model_dir("zipformer-en-20m")
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn unknown_model_id_falls_back_to_language_default() {
+        let (dir, path) = write_config(
+            "unknown-model",
+            r#"language = "indonesia"
+model_id = "does-not-exist"
+"#,
+        );
+
+        let settings = Settings::load_from(&path);
+        assert_eq!(
+            settings.model_id.as_deref(),
+            Some("whisper-tiny-multilingual")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn legacy_relative_model_dir_is_migrated() {
+        let mut settings = Settings {
+            model_id: None,
+            model_dir: "models/legacy-model".into(),
+            ..Default::default()
+        };
+        settings.normalize();
+
+        assert_eq!(
+            settings.model_dir,
+            santhra_models::models_root()
+                .join("legacy-model")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn legacy_absolute_model_dir_is_preserved() {
+        let absolute = std::env::temp_dir().join("santhra-legacy-model");
+        let mut settings = Settings {
+            model_id: None,
+            model_dir: absolute.display().to_string(),
+            ..Default::default()
+        };
+        settings.normalize();
+
+        assert_eq!(settings.model_dir, absolute.display().to_string());
     }
 }

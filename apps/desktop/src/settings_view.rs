@@ -1,7 +1,7 @@
 use rune::{El, ScrollSpec, col, el, row, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Card, ColorPicker, Combobox, ComboboxOption,
-    Field, Hsv, Kit, Placement, Popover, Progress, ScrollBar, Slider, Switch,
+    Badge, BadgeVariant, Button, ButtonVariant, Card, ColorPicker, Combobox, ComboboxOption, Field,
+    Hsv, Kit, Placement, Popover, Progress, ScrollBar, Slider, Switch,
 };
 use santhra_models::{Language, catalog, entry, model_dir, speech_language, speech_languages};
 
@@ -9,7 +9,7 @@ use crate::app::{
     DownloadStatus, FontChoice, Shared, State, cancel_download, leaked_family, model_ready,
     refresh_model, restart_session, start_download, toggle_overlay, use_model,
 };
-use crate::settings::{Settings, BACKGROUND_PRESETS};
+use crate::settings::{BACKGROUND_PRESETS, Settings};
 
 /// Scrollable settings pane body, inset from the section header.
 fn body(kit: &Kit, content: El) -> El {
@@ -254,7 +254,12 @@ pub(crate) fn recognition_body(
 
     let choose_model = Card::new()
         .title("Choose model", None)
-        .child(Field::new().label("Language").control(language_picker).build(kit))
+        .child(
+            Field::new()
+                .label("Language")
+                .control(language_picker)
+                .build(kit),
+        )
         .child(Field::new().label("Model").control(model_picker).build(kit))
         .child(
             text(if needs_activate {
@@ -269,7 +274,12 @@ pub(crate) fn recognition_body(
 
     let audio = Card::new()
         .title("Audio", None)
-        .child(Field::new().label("Audio source").control(source_picker).build(kit))
+        .child(
+            Field::new()
+                .label("Audio source")
+                .control(source_picker)
+                .build(kit),
+        )
         .child(
             row().child(
                 Button::new("Refresh model check")
@@ -297,11 +307,14 @@ pub(crate) fn recognition_body(
         )
         .build(kit);
 
-    body(kit, two_columns(
-        column(narrow).child(summary.build(kit)),
-        column(narrow).child(choose_model).child(audio),
-        narrow,
-    ))
+    body(
+        kit,
+        two_columns(
+            column(narrow).child(summary.build(kit)),
+            column(narrow).child(choose_model).child(audio),
+            narrow,
+        ),
+    )
 }
 
 pub(crate) fn appearance_body(
@@ -508,11 +521,14 @@ pub(crate) fn appearance_body(
         )
         .build(kit);
 
-    body(kit, two_columns(
-        column(narrow).child(caption_text),
-        column(narrow).child(overlay),
-        narrow,
-    ))
+    body(
+        kit,
+        two_columns(
+            column(narrow).child(caption_text),
+            column(narrow).child(overlay),
+            narrow,
+        ),
+    )
 }
 
 fn color_trigger(hsv: Hsv, kit: &Kit, on_press: fn(&mut State)) -> El {
@@ -527,8 +543,7 @@ fn color_trigger(hsv: Hsv, kit: &Kit, on_press: fn(&mut State)) -> El {
                 .gap(8.0)
                 .center_y()
                 .child(
-                    el()
-                        .size(14.0, 14.0)
+                    el().size(14.0, 14.0)
                         .radius(3.0)
                         .fill(swatch)
                         .border(1.0, border),
@@ -553,7 +568,11 @@ pub(crate) fn about_body(kit: &Kit) -> El {
     }
     let about = Card::new()
         .title("About", None)
-        .child(text("Santhra").font(kit.ty.body_medium).color(kit.c.text_base))
+        .child(
+            text("Santhra")
+                .font(kit.ty.body_medium)
+                .color(kit.c.text_base),
+        )
         .child(
             text("Live system-audio captions with a floating overlay.")
                 .font(kit.ty.body)
