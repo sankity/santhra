@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 sherpa-onnx = "2.0.3"
 anyhow = "1"
+caption-core = { path = "../caption-core" }
 santhra-models = { path = "../santhra-models" }

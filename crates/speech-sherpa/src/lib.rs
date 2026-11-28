@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+pub use caption_core::{Segment, SegmentStatus};
 pub use santhra_models::ModelKind;
 use sherpa_onnx::{
     OfflineRecognizer, OfflineRecognizerConfig, OnlineRecognizer, OnlineRecognizerConfig,
@@ -271,7 +272,59 @@ impl Default for AsrOptions {
 #[derive(Default)]
 pub struct Events {
     pub partial: Option<String>,
-    pub finals: Vec<String>,
+    pub finals: Vec<Segment>,
+}
+
+fn samples_to_ms(samples: u64) -> u64 {
+    samples / 16
+}
+
+fn seconds_to_ms(seconds: f32) -> u64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        0
+    } else {
+        (seconds * 1000.0).round() as u64
+    }
+}
+
+/// Sample-accurate clock used when sherpa does not expose token timestamps.
+#[derive(Default)]
+struct Clock {
+    session_samples: u64,
+    stream_start_samples: u64,
+    segment_start_samples: u64,
+}
+
+impl Clock {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn advance(&mut self, samples: usize) {
+        self.session_samples += samples as u64;
+    }
+
+    fn on_endpoint(&mut self) {
+        self.stream_start_samples = self.session_samples;
+        self.segment_start_samples = self.session_samples;
+    }
+
+    /// Prefer sherpa's token timestamps; they are relative to the current stream, so add the
+    /// samples already consumed before that stream started. `start_time` is always 0 in the
+    /// pinned sherpa build, so it is not used.
+    fn timing(&self, timestamps: Option<&Vec<f32>>) -> (u64, Option<u64>) {
+        if let Some(first) = timestamps.and_then(|ts| ts.first())
+            && let Some(last) = timestamps.and_then(|ts| ts.last())
+        {
+            let base = samples_to_ms(self.stream_start_samples);
+            let start = base.saturating_add(seconds_to_ms(*first));
+            let end = base.saturating_add(seconds_to_ms(*last)).max(start);
+            return (start, Some(end));
+        }
+        let start = samples_to_ms(self.segment_start_samples);
+        let end = samples_to_ms(self.session_samples).max(start);
+        (start, Some(end))
+    }
 }
 
 enum Engine {
@@ -291,6 +344,7 @@ enum Engine {
 
 pub struct Transcriber {
     engine: Engine,
+    clock: Clock,
 }
 
 impl Transcriber {
@@ -326,11 +380,16 @@ impl Transcriber {
                 }
             }
         };
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            clock: Clock::default(),
+        })
     }
 
-    /// Clear per-utterance state without reloading the model.
+    /// Clear per-utterance state without reloading the model. The clock restarts too, so batch
+    /// samples are timed relative to themselves; a live session never calls this.
     fn reset(&mut self) {
+        self.clock.reset();
         match &mut self.engine {
             Engine::Online {
                 recognizer,
@@ -346,6 +405,7 @@ impl Transcriber {
     }
 
     pub fn push(&mut self, samples: &[f32]) -> Events {
+        self.clock.advance(samples.len());
         match &mut self.engine {
             Engine::Online {
                 recognizer,
@@ -356,7 +416,7 @@ impl Transcriber {
                 if !samples.is_empty() {
                     stream.accept_waveform(SAMPLE_RATE, samples);
                 }
-                decode_online(recognizer, stream, last_partial)
+                decode_online(recognizer, stream, last_partial, &mut self.clock)
             }
             Engine::Offline {
                 recognizer,
@@ -364,10 +424,22 @@ impl Transcriber {
                 samples_per_chunk,
             } => {
                 buffer.extend_from_slice(samples);
+                let mut cursor = self
+                    .clock
+                    .session_samples
+                    .saturating_sub(buffer.len() as u64);
                 let mut events = Events::default();
                 while buffer.len() >= *samples_per_chunk {
                     let chunk: Vec<f32> = buffer.drain(..*samples_per_chunk).collect();
-                    decode_offline(recognizer, &chunk, &mut events);
+                    let start_ms = samples_to_ms(cursor);
+                    cursor += chunk.len() as u64;
+                    decode_offline(
+                        recognizer,
+                        &chunk,
+                        &mut events,
+                        start_ms,
+                        samples_to_ms(cursor),
+                    );
                 }
                 events
             }
@@ -383,9 +455,16 @@ impl Transcriber {
                 ..
             } => {
                 stream.input_finished();
-                let mut events = decode_online(recognizer, stream, last_partial);
+                let mut events = decode_online(recognizer, stream, last_partial, &mut self.clock);
                 if !last_partial.trim().is_empty() {
-                    events.finals.push(std::mem::take(last_partial));
+                    let (start_ms, end_ms) = self.clock.timing(None);
+                    events.finals.push(Segment {
+                        text: std::mem::take(last_partial),
+                        start_ms,
+                        end_ms,
+                        status: SegmentStatus::Final,
+                        confidence: None,
+                    });
                 }
                 events
             }
@@ -395,7 +474,17 @@ impl Transcriber {
                 let mut events = Events::default();
                 if !buffer.is_empty() {
                     let chunk = std::mem::take(buffer);
-                    decode_offline(recognizer, &chunk, &mut events);
+                    let start_ms = self
+                        .clock
+                        .session_samples
+                        .saturating_sub(chunk.len() as u64);
+                    decode_offline(
+                        recognizer,
+                        &chunk,
+                        &mut events,
+                        samples_to_ms(start_ms),
+                        samples_to_ms(self.clock.session_samples),
+                    );
                 }
                 events
             }
@@ -419,6 +508,7 @@ fn decode_online(
     recognizer: &OnlineRecognizer,
     stream: &OnlineStream,
     last_partial: &mut String,
+    clock: &mut Clock,
 ) -> Events {
     let mut events = Events::default();
     while recognizer.is_ready(stream) {
@@ -426,23 +516,37 @@ fn decode_online(
         let Some(result) = recognizer.get_result(stream) else {
             continue;
         };
-        if !result.text.is_empty() {
-            events.partial = Some(result.text.clone());
-            *last_partial = result.text.clone();
-        }
-        if recognizer.is_endpoint(stream) {
+        let endpoint = recognizer.is_endpoint(stream);
+        if endpoint {
             if !result.text.trim().is_empty() {
-                events.finals.push(result.text.clone());
+                let (start_ms, end_ms) = clock.timing(result.timestamps.as_ref());
+                events.finals.push(Segment {
+                    text: result.text.clone(),
+                    start_ms,
+                    end_ms,
+                    status: SegmentStatus::Final,
+                    confidence: None,
+                });
             }
             events.partial = Some(String::new());
             last_partial.clear();
             recognizer.reset(stream);
+            clock.on_endpoint();
+        } else if !result.text.is_empty() {
+            events.partial = Some(result.text.clone());
+            *last_partial = result.text.clone();
         }
     }
     events
 }
 
-fn decode_offline(recognizer: &OfflineRecognizer, samples: &[f32], events: &mut Events) {
+fn decode_offline(
+    recognizer: &OfflineRecognizer,
+    samples: &[f32],
+    events: &mut Events,
+    start_ms: u64,
+    end_ms: u64,
+) {
     let stream = recognizer.create_stream();
     stream.accept_waveform(SAMPLE_RATE, samples);
     recognizer.decode(&stream);
@@ -450,7 +554,21 @@ fn decode_offline(recognizer: &OfflineRecognizer, samples: &[f32], events: &mut 
         .get_result()
         .filter(|result| !result.text.trim().is_empty())
     {
-        events.finals.push(result.text);
+        let (start, end) = match result.timestamps.as_ref() {
+            Some(ts) if ts.len() >= 2 => {
+                let first = start_ms.saturating_add(seconds_to_ms(ts[0]));
+                let last = start_ms.saturating_add(seconds_to_ms(ts[ts.len() - 1]));
+                (first, last.max(first).min(end_ms))
+            }
+            _ => (start_ms, end_ms),
+        };
+        events.finals.push(Segment {
+            text: result.text,
+            start_ms: start,
+            end_ms: Some(end),
+            status: SegmentStatus::Final,
+            confidence: None,
+        });
     }
     events.partial = None;
 }
@@ -561,5 +679,34 @@ mod tests {
         assert_eq!(chunk_size(16000, 100), 1600);
         assert_eq!(chunk_size(8000, 100), 800);
         assert_eq!(chunk_size(16000, 0), 1);
+    }
+
+    #[test]
+    fn timing_helpers_are_accurate() {
+        assert_eq!(samples_to_ms(16_000), 1000);
+        assert_eq!(samples_to_ms(16), 1);
+        assert_eq!(seconds_to_ms(1.25), 1250);
+        assert_eq!(seconds_to_ms(-1.0), 0);
+        assert_eq!(seconds_to_ms(f32::NAN), 0);
+    }
+
+    #[test]
+    fn clock_fallback_counts_samples_and_restarts_on_reset() {
+        let mut clock = Clock::default();
+        clock.advance(16_000);
+        assert_eq!(clock.timing(None), (0, Some(1000)));
+        clock.reset();
+        clock.advance(1600);
+        assert_eq!(clock.timing(None), (0, Some(100)));
+    }
+
+    #[test]
+    fn clock_keeps_session_offset_across_endpoint() {
+        let mut clock = Clock::default();
+        clock.advance(16_000);
+        clock.on_endpoint();
+        clock.advance(1600);
+        assert_eq!(clock.timing(None), (1000, Some(1100)));
+        assert_eq!(clock.timing(Some(&vec![0.1, 0.2])), (1100, Some(1200)));
     }
 }

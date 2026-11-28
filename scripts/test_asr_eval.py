@@ -321,6 +321,27 @@ class BatchProtocolTest(unittest.TestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual(summary["peak_rss_kb"], 100)
 
+    def test_extra_segments_key_is_preserved(self):
+        text = "\n".join(
+            [
+                json.dumps({"type": "meta", "model_id": "m"}),
+                self.record(
+                    segments=[
+                        {
+                            "text": "hello world",
+                            "start_ms": 0,
+                            "end_ms": 480,
+                            "status": "final",
+                            "confidence": None,
+                        }
+                    ]
+                ),
+            ]
+        )
+        _, samples, _ = evaluator.parse_batch_output(text)
+        self.assertEqual(samples[0]["finals"], ["hello world"])
+        self.assertEqual(samples[0]["segments"][0]["end_ms"], 480)
+
     def test_rejects_non_json_line(self):
         text = json.dumps({"type": "meta", "model_id": "m"}) + "\nlog: model loaded\n"
         with self.assertRaises(evaluator.EvalError):

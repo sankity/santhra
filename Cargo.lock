@@ -3923,6 +3923,7 @@ name = "speech-sherpa"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caption-core",
  "santhra-models",
  "sherpa-onnx",
 ]

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use app_core::{Message, Session, SessionOptions};
 use audio_linux::Target;
-use caption_core::{CaptionConfig, CaptionSnapshot, Captions};
+use caption_core::{CaptionConfig, CaptionSnapshot, Captions, SegmentStatus};
 use clap::{Args, Parser, Subcommand};
 use santhra_download::{Progress, download_all};
 use santhra_models::{
@@ -199,6 +199,7 @@ impl Common {
             target: Target::from_key(target.as_deref()),
             model_dir: self.model_dir()?,
             model_kind: self.model_kind().as_str().to_owned(),
+            chunk_ms: self.chunk_ms,
             buffer_ms: self.buffer_ms,
             language: self.whisper_language(),
             threads: self.threads,
@@ -274,6 +275,7 @@ fn emit(sink: &mut dyn Write, value: &Value) -> Result<()> {
 struct SampleOutcome {
     status: &'static str,
     finals: Vec<String>,
+    segments: Vec<Value>,
     elapsed_ms: Option<f64>,
     partial_count: u64,
     first_partial_ms: Option<f64>,
@@ -286,6 +288,7 @@ impl SampleOutcome {
         Self {
             status,
             finals: Vec::new(),
+            segments: Vec::new(),
             elapsed_ms: None,
             partial_count: 0,
             first_partial_ms: None,
@@ -320,6 +323,7 @@ fn run_sample(transcriber: &mut Transcriber, opts: &AsrOptions, path: &Path) -> 
     let mut outcome = SampleOutcome {
         status: "success",
         finals: Vec::new(),
+        segments: Vec::new(),
         elapsed_ms: None,
         partial_count: 0,
         first_partial_ms: None,
@@ -337,9 +341,19 @@ fn run_sample(transcriber: &mut Transcriber, opts: &AsrOptions, path: &Path) -> 
                 outcome.first_partial_ms = Some(millis(start));
             }
         }
-        for text in events.finals {
+        for segment in events.finals {
             outcome.final_caption_ms = Some(millis(start));
-            outcome.finals.push(text);
+            outcome.finals.push(segment.text.clone());
+            outcome.segments.push(json!({
+                "text": segment.text,
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "status": match segment.status {
+                    SegmentStatus::Final => "final",
+                    SegmentStatus::Partial => "partial",
+                },
+                "confidence": segment.confidence,
+            }));
         }
     });
     outcome.elapsed_ms = Some(millis(start));
@@ -435,6 +449,7 @@ fn transcribe_batch(
                     "id": id,
                     "status": "timeout",
                     "finals": [],
+                    "segments": [],
                     "elapsed_ms": Value::Null,
                     "partial_count": 0,
                     "first_partial_ms": Value::Null,
@@ -474,6 +489,7 @@ fn transcribe_batch(
                 "id": id,
                 "status": outcome.status,
                 "finals": outcome.finals,
+                "segments": outcome.segments,
                 "elapsed_ms": outcome.elapsed_ms,
                 "partial_count": outcome.partial_count,
                 "first_partial_ms": outcome.first_partial_ms,

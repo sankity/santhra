@@ -85,6 +85,19 @@ META="$(cat "$RUN"/batch-*.jsonl | grep -c '"type":"meta"')"
 [[ "$META" == "1" ]] || fail "expected one model load per batch, saw $META meta records"
 echo "OK: model loaded once for the whole batch"
 
+python3 - "$RUN" <<'PY' || fail "batch segments missing timing"
+import glob, json, sys
+records = [json.loads(line) for path in glob.glob(sys.argv[1] + "/batch-*.jsonl") for line in open(path)]
+samples = [record for record in records if record.get("type") == "sample"]
+assert samples, "no sample records"
+for sample in samples:
+    assert "segments" in sample, "sample has no segments key"
+    for segment in sample["segments"]:
+        assert segment["start_ms"] >= 0, "negative start_ms"
+        assert segment["end_ms"] is None or segment["end_ms"] >= segment["start_ms"], "bad end_ms"
+print("OK: segments carry timing")
+PY
+
 step "level 1: failure path (broken audio -> audio_error, exit 1)"
 set +e
 python3 scripts/test-asr-language.py smoke \

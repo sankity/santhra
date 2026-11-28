@@ -13,6 +13,7 @@ pub struct SessionOptions {
     pub target: Target,
     pub model_dir: PathBuf,
     pub model_kind: String,
+    pub chunk_ms: u32,
     pub buffer_ms: u32,
     pub language: Option<String>,
     pub threads: i32,
@@ -69,13 +70,7 @@ impl Session {
         let asr = std::thread::Builder::new()
             .name("santhra-asr".into())
             .spawn(move || {
-                let asr_opts = AsrOptions {
-                    chunk_ms: 100,
-                    threads: opts.threads,
-                    provider: opts.provider.clone(),
-                    buffer_ms: opts.buffer_ms,
-                    language: opts.language.clone(),
-                };
+                let asr_opts = asr_options(&opts);
                 let kind =
                     ModelKind::parse(&opts.model_kind).unwrap_or(ModelKind::ZipformerTransducer);
                 let model = match ModelFiles::load_kind(&opts.model_dir, kind) {
@@ -100,8 +95,8 @@ impl Session {
                     if let Some(partial) = &events.partial {
                         captions.set_partial(partial);
                     }
-                    for text in events.finals {
-                        captions.add_final(&text);
+                    for segment in &events.finals {
+                        captions.add_final(segment);
                     }
                     let _ = tx.send(Message::Captions(captions.snapshot()));
                 };
@@ -133,6 +128,16 @@ impl Session {
 
     pub fn messages(&self) -> impl Iterator<Item = Message> + '_ {
         self.rx.iter()
+    }
+}
+
+fn asr_options(opts: &SessionOptions) -> AsrOptions {
+    AsrOptions {
+        chunk_ms: opts.chunk_ms,
+        threads: opts.threads,
+        provider: opts.provider.clone(),
+        buffer_ms: opts.buffer_ms,
+        language: opts.language.clone(),
     }
 }
 
@@ -185,5 +190,22 @@ mod tests {
         assert_eq!(label_for(&Target::Sink("sink".into()), &apps), "sink");
         assert_eq!(label_for(&Target::App(7), &apps), "ExampleApp — A tab");
         assert_eq!(label_for(&Target::App(9), &apps), "app:9");
+    }
+
+    #[test]
+    fn asr_options_carries_chunk_ms() {
+        let opts = SessionOptions {
+            target: Target::Default,
+            model_dir: PathBuf::from("models"),
+            model_kind: "zipformer".into(),
+            chunk_ms: 60,
+            buffer_ms: 2500,
+            language: None,
+            threads: 2,
+            provider: "cpu".into(),
+            max_lines: 2,
+            show_partial: true,
+        };
+        assert_eq!(asr_options(&opts).chunk_ms, 60);
     }
 }

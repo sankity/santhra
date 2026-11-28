@@ -177,6 +177,8 @@ Other options: `--seed`, `--manifest`, `--output-dir`, `--cache-dir`, `--force-d
 `--bucket-short`, `--bucket-medium`, `--max-cer`, `--min-success-rate`. Only catalog models
 listed for a language are evaluated; downloads and dataset fetches are opt-in
 (`--download-missing-models`, `--yes-download-large`). Models run one batch at a time on CPU.
+Batch sample records also carry `segments` with `start_ms`/`end_ms`; the legacy `finals` key
+stays an array of strings so the evaluator is unaffected.
 
 FLEURS is pinned to revision `4683b04af03d2d9549064c7d72060a9a94bb6046` (CC-BY-4.0).
 Archives can be hundreds of MB; the first run needs `--yes-download-large`. Cache layout:

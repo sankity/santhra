@@ -710,7 +710,7 @@ pub fn on_close() {
 
 /// Headless tooling scene: caption text without a running audio/ASR session.
 pub fn scene_captions(s: &mut State) {
-    use caption_core::CaptionLine;
+    use caption_core::{CaptionLine, SegmentStatus};
 
     s.section = Section::Captions;
     let shared = Shared::get();
@@ -720,10 +720,18 @@ pub fn scene_captions(s: &mut State) {
             CaptionLine {
                 id: 1,
                 text: "the first caption line".into(),
+                start_ms: 0,
+                end_ms: Some(1200),
+                status: SegmentStatus::Final,
+                confidence: None,
             },
             CaptionLine {
                 id: 2,
                 text: "AFTER EARLY NIGHTFALL THE YELLOW LAMPS WOULD LIGHT UP HERE AND THERE".into(),
+                start_ms: 1200,
+                end_ms: Some(4800),
+                status: SegmentStatus::Final,
+                confidence: None,
             },
         ],
     };

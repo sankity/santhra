@@ -103,7 +103,7 @@ programmatically. No verified Rune UI path for Android exists in this rev.
 | Capability | API | Used | Phase |
 |---|---|---|---|
 | Streaming/offline ASR | `OnlineRecognizer`, `OfflineRecognizer`, `RecognizerResult` | yes | 0 |
-| Segment timestamps | `RecognizerResult::{timestamps, start_time, is_final, segment}`, `enable_token_timestamps` | no | 0.5 |
+| Segment timestamps | `RecognizerResult::{timestamps, start_time, is_final, segment}`, `enable_token_timestamps` | yes (Phase 0.5) | 0.5 |
 | VAD | `VoiceActivityDetector`, `VadModelConfig` (Silero, TEN-VAD) | no | 3.2 |
 | Language ID | `SpokenLanguageIdentification` (result: `lang` only, **no confidence**) | no | 3.1 |
 | Punctuation / resampling | `OfflinePunctuation`, `LinearResampler` | no | 3 |
@@ -114,15 +114,32 @@ time (including Android JNI libs), so CI needs network on a cold cache. `DOCS_RS
 
 ## 5. Contracts
 
-### Events (current)
+### Events
 
 ```rust
+// caption-core (also re-exported from speech-sherpa)
+pub enum SegmentStatus { Partial, Final }
+pub struct Segment {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+    pub status: SegmentStatus,
+    pub confidence: Option<f32>, // None: greedy sherpa does not expose a score
+}
+
 // speech-sherpa
-pub struct Events { pub partial: Option<String>, pub finals: Vec<String> }
+pub struct Events { pub partial: Option<String>, pub finals: Vec<Segment> }
 
 // caption-core
-pub enum CaptionEvent { Partial(String), Final { id: u64, text: String } }
-pub struct CaptionLine { pub id: u64, pub text: String }
+pub enum CaptionEvent { Partial(String), Final { id: u64, segment: Segment } }
+pub struct CaptionLine {
+    pub id: u64,
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+    pub status: SegmentStatus,
+    pub confidence: Option<f32>,
+}
 pub struct CaptionSnapshot { pub partial: String, pub finals: Vec<CaptionLine> }
 
 // app-core
@@ -133,14 +150,15 @@ pub enum Message {
 }
 ```
 
-No time is carried today. Phase 0.5 will add `start_ms`, `end_ms`, status and optional
-confidence to the segment type and propagate it through `caption-core` and `app-core`.
+Times are milliseconds from session start (from each sample in batch runs). The CLI keeps its
+legacy `finals` array of strings and adds a `segments` array of the objects above; the
+evaluator ignores the new key.
 
 ### ASR boundary (current)
 
 ```rust
 pub struct AsrOptions {
-    pub chunk_ms: u32,          // hardcoded to 100 in app-core today
+    pub chunk_ms: u32,          // from SessionOptions/Settings (default 100), not hardcoded
     pub threads: i32,
     pub provider: String,
     pub buffer_ms: u32,
@@ -209,8 +227,8 @@ Partials stay in memory; only finals are persisted.
 | `app-core` → `audio-linux` unconditional | workspace cannot compile on Windows/macOS | Phase 4 |
 | `settings.rs` → `rune::Color`, `rune_kit::Hsv`, `audio_linux::Target`, `app_core::SessionOptions` | settings not reusable by CLI/Android | phase 5+, see Decisions |
 | Legacy `Language` (4) beside `SpeechLanguage` (10) in the catalog | registry refactor for categories/translation | Phase 2/3 |
-| `chunk_ms = 100` hardcoded in `app-core` | blocks latency presets | Phase 0.5 |
-| `caption-core` has no time/status | blocks persistence | Phase 0.5 |
+| `chunk_ms` now flows from `SessionOptions`/`Settings` | latency presets still need UI knobs | Phase 3.3 |
+| `Segment` carries time/status/confidence | Phase 1 can map it to `TranscriptSegment` | Phase 1 |
 | Downloads have no HTTP range resume | interrupted file restarts at byte 0 | Phase 2.4 |
 
 Also missing: transcript storage/history/search/export (Phase 1), translation (Phase 2),
@@ -239,3 +257,10 @@ the UI thread. The overlay uses a transparent `WindowSpec`, not `rune::Overlay`.
    `audio-linux`, so Windows/macOS jobs move to Phase 4 with the platform adapters. Linux CI
    installs `libpipewire-0.3-dev`, `libspa-0.2-dev`, `libclang-dev`, `libxkbcommon-dev`,
    `pkg-config`.
+6. **Timing source (Phase 0.5).** Use sherpa token timestamps when present: Zipformer and
+   Nemotron emit non-empty `timestamps`; `start_time` is always `0` and `is_final` stays false,
+   so neither is used. Paraformer online and the installed Whisper export have empty timestamps
+   (the latter warns that the decoder lacks cross-attention outputs), so those models fall back
+   to a sample-count clock (16 kHz → 1 ms per 16 samples). The clock keeps a session offset
+   across endpoint resets; `reset()` restarts it for per-sample batch runs. Confidence stays
+   `None`.

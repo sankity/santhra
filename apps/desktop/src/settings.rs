@@ -38,6 +38,7 @@ pub struct Settings {
     pub language: Option<String>,
     pub model_id: Option<String>,
     pub model_kind: Option<String>,
+    pub chunk_ms: u32,
     pub buffer_ms: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
@@ -62,6 +63,7 @@ impl Default for Settings {
             language: Some("english".into()),
             model_id: Some("zipformer-en-20m".into()),
             model_kind: Some("zipformer".into()),
+            chunk_ms: 100,
             buffer_ms: 2500,
             threads: 2,
             max_lines: 2,
@@ -180,6 +182,7 @@ impl Settings {
             target: Target::from_key(self.target.as_deref()),
             model_dir,
             model_kind,
+            chunk_ms: self.chunk_ms,
             buffer_ms: self.buffer_ms,
             language: whisper_language,
             threads: self.threads,
@@ -277,6 +280,15 @@ mod tests {
 
         settings.target = Some("app:645".into());
         assert_eq!(settings.session_options().target, Target::App(645));
+    }
+
+    #[test]
+    fn session_options_carries_chunk_ms() {
+        let settings = Settings {
+            chunk_ms: 60,
+            ..Default::default()
+        };
+        assert_eq!(settings.session_options().chunk_ms, 60);
     }
 
     #[test]
