@@ -19,6 +19,8 @@ Linux is the only target for now; Windows, macOS, and Android are planned.
 - Rust 1.85+ (edition 2024; `rust-toolchain.toml` pins the toolchain used in CI).
 - PipeWire development headers, for example `pipewire` on Arch and `libpipewire-0.3-dev`
   plus `pkg-config` on Debian/Ubuntu.
+- `libxkbcommon-dev` on Debian/Ubuntu (`libxkbcommon` on Arch) — Rune's desktop binary links
+  `-lxkbcommon`, so the development package is needed to build `santhra-desktop`.
 - `pactl` (PipeWire/PulseAudio tools) for per-application stream enumeration. Without it the
   application list is silently empty; sink capture still works.
 - Internet on the first build only: `sherpa-onnx-sys` downloads prebuilt native libraries and

@@ -55,7 +55,7 @@ Platform-specific dependencies:
 |---|---|---|
 | `pipewire` / `pipewire-sys` | Linux only | bindgen at build time |
 | `pactl` | Linux runtime | app enumeration; missing binary → silently empty list |
-| `rune`, `rune-kit` | desktop only | git rev `4918969` |
+| `rune`, `rune-kit` | desktop only | git rev `4918969`; desktop links `-lxkbcommon` |
 | `sherpa-onnx-sys` | all ASR consumers | downloads native libs into `target/sherpa-onnx-prebuilt` |
 | `ureq` | `santhra-download` | HTTPS model downloads |
 
@@ -237,4 +237,5 @@ the UI thread. The overlay uses a transparent `WindowSpec`, not `rune::Overlay`.
    `OverlayHandle::resize` works.
 5. **CI is Linux-only until the audio abstraction exists (Phase 0).** `app-core` depends on
    `audio-linux`, so Windows/macOS jobs move to Phase 4 with the platform adapters. Linux CI
-   installs `libpipewire-0.3-dev`, `libspa-0.2-dev`, `libclang-dev`, `pkg-config`.
+   installs `libpipewire-0.3-dev`, `libspa-0.2-dev`, `libclang-dev`, `libxkbcommon-dev`,
+   `pkg-config`.

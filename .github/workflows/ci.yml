@@ -16,8 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # pipewire-sys runs bindgen, so libclang is required. Wayland/xkbcommon are
-      # dlopen-based in the pinned Rune rev and need no development headers.
+      # pipewire-sys runs bindgen (libclang). The desktop binary links -lxkbcommon even
+      # though it uses xkbcommon-dl, so its development package is required at link time.
+      # Wayland is dlopen-based and needs no development headers.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -25,6 +26,7 @@ jobs:
             libpipewire-0.3-dev \
             libspa-0.2-dev \
             libclang-dev \
+            libxkbcommon-dev \
             pkg-config
 
       - name: Install Rust
